@@ -1,0 +1,5 @@
+﻿[2025-05-15T01:25:59.1164997+05:00] === Webhook Log File Initialized ===
+
+MONGODB_URI=your_mongodb_connection_string
+STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
