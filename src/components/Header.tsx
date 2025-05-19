@@ -34,6 +34,9 @@ const Header: React.FC = () => {
                             <Link href="/booking" className="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200">
                                 Book Now
                             </Link>
+                            <Link href="/booking/My-Booking" className="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200">
+                                My-Booking
+                            </Link>
 
                         </nav>
 

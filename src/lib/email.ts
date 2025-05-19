@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 
 // Create reusable transporter object using SMTP transport
 const transporter = nodemailer.createTransport({
@@ -17,6 +18,22 @@ interface EmailOptions {
     to: string;
     subject: string;
     html: string;
+}
+
+// Generate verification token
+export function generateVerificationToken() {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date();
+    expires.setHours(expires.getHours() + 24); // Token expires in 24 hours
+    return { token, expires };
+}
+
+// Generate 6-digit verification code
+export function generateVerificationCode() {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date();
+    expires.setHours(expires.getHours() + 24); // Code expires in 24 hours
+    return { code, expires };
 }
 
 export async function sendEmail({ to, subject, html }: EmailOptions) {
@@ -122,22 +139,49 @@ export function getBookingReminderEmail(booking: any) {
     };
 }
 
-export function getRegistrationConfirmationEmail(user: any) {
+export function getRegistrationConfirmationEmail({ firstName, lastName, email, verificationToken, verificationCode }: { firstName: string; lastName: string; email: string; verificationToken: string; verificationCode: string }) {
+    const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL}/verify-email?token=${verificationToken}`;
     return {
         subject: 'Welcome to Hire a Clinic!',
         html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                 <h1 style="color: #3b82f6; text-align: center;">Welcome to Hire a Clinic</h1>
-                <p>Dear ${user.firstName},</p>
-                <p>Thank you for registering with Hire a Clinic. Your account has been successfully created.</p>
-                
+                <p>Dear ${firstName},</p>
+                <p>Thank you for registering with Hire a Clinic. To complete your registration and activate your account, you can either:</p>
+                <ol>
+                  <li>Click the button below</li>
+                  <li>Or enter the following 6-digit code on the verification page</li>
+                </ol>
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="${verificationUrl}" style="background-color: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Verify Email Address</a>
+                </div>
+                <p style="font-size: 1.2em; text-align: center; letter-spacing: 0.2em; font-weight: bold;">${verificationCode}</p>
+                <p>Or copy and paste this link into your browser:</p>
+                <p style="word-break: break-all;">${verificationUrl}</p>
+                <p>This code and link will expire in 24 hours.</p>
                 <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
                     <h2 style="color: #1f2937; margin-top: 0;">Your Account Details</h2>
-                    <p><strong>Name:</strong> ${user.firstName} ${user.lastName}</p>
-                    <p><strong>Email:</strong> ${user.email}</p>
+                    <p><strong>Name:</strong> ${firstName} ${lastName}</p>
+                    <p><strong>Email:</strong> ${email}</p>
                 </div>
-                
-                <p>You can now:</p>
+                <p>If you did not create this account, please ignore this email.</p>
+                <div style="text-align: center; margin-top: 30px; color: #6b7280;">
+                    <p>Hire a Clinic</p>
+                    <p>2140 N Lake Forest Dr #100, McKinney, TX 75071</p>
+                </div>
+            </div>
+        `
+    };
+}
+
+export function getVerificationSuccessEmail({ firstName }: { firstName: string }) {
+    return {
+        subject: 'Email Verified Successfully',
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h1 style="color: #3b82f6; text-align: center;">Email Verified Successfully</h1>
+                <p>Dear ${firstName},</p>
+                <p>Your email has been successfully verified. You can now:</p>
                 <ul style="list-style-type: none; padding: 0;">
                     <li style="margin: 10px 0; padding-left: 24px; position: relative;">
                         ✓ Book clinic rooms and facilities

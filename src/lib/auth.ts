@@ -15,7 +15,7 @@ declare module "next-auth" {
             name: string;
             firstName: string;
             lastName: string;
-            isVerified: boolean;
+            isEmailVerified: boolean;
         }
     }
 }
@@ -28,7 +28,7 @@ declare module "next-auth/jwt" {
         name: string;
         firstName: string;
         lastName: string;
-        isVerified: boolean;
+        isEmailVerified: boolean;
     }
 }
 
@@ -57,7 +57,7 @@ export const authOptions: NextAuthOptions = {
                 token.name = user.name;
                 token.firstName = user.firstName;
                 token.lastName = user.lastName;
-                token.isVerified = user.isVerified;
+                token.isEmailVerified = user.isEmailVerified;
             }
 
             // Handle updates to the session
@@ -66,14 +66,9 @@ export const authOptions: NextAuthOptions = {
                 await dbConnect();
                 const freshUser = await User.findById(token.id).lean();
                 if (freshUser) {
-                    console.log('Updating JWT with fresh user data:', {
-                        userId: freshUser._id,
-                        isVerified: freshUser.isVerified
-                    });
-
                     return {
                         ...token,
-                        isVerified: freshUser.isVerified,
+                        isEmailVerified: freshUser.isEmailVerified,
                         name: `${freshUser.firstName} ${freshUser.lastName}`,
                         firstName: freshUser.firstName,
                         lastName: freshUser.lastName,
@@ -81,28 +76,20 @@ export const authOptions: NextAuthOptions = {
                     };
                 }
             }
-
             return token;
         },
         async session({ session, token }) {
             if (token) {
-                // Get fresh user data for every session
                 await dbConnect();
                 const freshUser = await User.findById(token.id).lean();
-
                 if (freshUser) {
-                    console.log('Updating session with fresh user data:', {
-                        userId: freshUser._id,
-                        isVerified: freshUser.isVerified
-                    });
-
                     session.user = {
                         id: freshUser._id.toString(),
                         email: freshUser.email,
                         name: `${freshUser.firstName} ${freshUser.lastName}`,
                         firstName: freshUser.firstName,
                         lastName: freshUser.lastName,
-                        isVerified: freshUser.isVerified
+                        isEmailVerified: freshUser.isEmailVerified
                     };
                 } else {
                     session.user = {
@@ -111,7 +98,7 @@ export const authOptions: NextAuthOptions = {
                         name: token.name,
                         firstName: token.firstName,
                         lastName: token.lastName,
-                        isVerified: token.isVerified
+                        isEmailVerified: token.isEmailVerified
                     };
                 }
             }
@@ -156,6 +143,12 @@ export const authOptions: NextAuthOptions = {
                         throw new Error("Invalid email or password");
                     }
 
+                    // Block login if user is not email verified
+                    if (!user.isEmailVerified) {
+                        console.log('User not verified');
+                        throw new Error('Please verify your email before logging in.');
+                    }
+
                     console.log('Authorization successful');
                     return {
                         id: user._id.toString(),
@@ -163,7 +156,7 @@ export const authOptions: NextAuthOptions = {
                         firstName: user.firstName,
                         lastName: user.lastName,
                         name: `${user.firstName} ${user.lastName}`,
-                        isVerified: user.isVerified
+                        isEmailVerified: user.isEmailVerified
                     };
                 } catch (error) {
                     console.error('Authorization error:', error);

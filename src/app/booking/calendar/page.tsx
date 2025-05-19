@@ -222,6 +222,11 @@ const CalendarPage: React.FC = () => {
         const normalizedDate = new Date(date);
         normalizedDate.setHours(12, 0, 0, 0);
 
+        if (isPastDate(normalizedDate)) {
+            toast.error('Cannot book past dates');
+            return;
+        }
+
         const room = selectedRooms.find(r => r.id === roomId);
         if (!room) return;
 
@@ -604,7 +609,7 @@ const CalendarPage: React.FC = () => {
         const dateStr = date.toISOString().split('T')[0];
         const isSelected = room.dates?.includes(dateStr);
 
-        if (isWeekend(date)) {
+        if (isWeekend(date) || isPastDate(date)) {
             return 'bg-gray-100 text-gray-400 cursor-not-allowed';
         }
 
@@ -832,6 +837,14 @@ const CalendarPage: React.FC = () => {
         );
     };
 
+    // Add new helper function after isWeekend
+    const isPastDate = (date: Date | null): boolean => {
+        if (!date) return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return date < today;
+    };
+
     // Show loading state while checking authentication
     if (status === 'loading') {
         return (
@@ -1016,7 +1029,8 @@ const CalendarPage: React.FC = () => {
                                             {getDaysInMonth(currentMonth).map((date, index) => {
                                                 const isBooked = date && isDateBooked(date, room.id, room.timeSlot);
                                                 const isWeekendDay = date && isWeekend(date);
-                                                const canSelect = date && !isWeekendDay && !isBooked;
+                                                const isPast = date && isPastDate(date);
+                                                const canSelect = date && !isWeekendDay && !isBooked && !isPast;
 
                                                 return (
                                                     <button
@@ -1027,8 +1041,9 @@ const CalendarPage: React.FC = () => {
                                                         title={
                                                             !date ? "" :
                                                                 isWeekendDay ? "Weekend is not available" :
-                                                                    isBooked ? `This time slot (${room.timeSlot}) is already booked` :
-                                                                        ""
+                                                                    isPast ? "Past dates are not available" :
+                                                                        isBooked ? `This time slot (${room.timeSlot}) is already booked` :
+                                                                            ""
                                                         }
                                                     >
                                                         {date?.getDate()}

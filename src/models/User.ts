@@ -29,9 +29,29 @@ const userSchema = new Schema({
         type: String,
         trim: true
     },
-    isVerified: {
+    isEmailVerified: {
         type: Boolean,
         default: false
+    },
+    isMembershipActive: {
+        type: Boolean,
+        default: false
+    },
+    verificationToken: {
+        type: String,
+        select: false
+    },
+    verificationTokenExpires: {
+        type: Date,
+        select: false
+    },
+    verificationCode: {
+        type: String,
+        select: false
+    },
+    verificationCodeExpires: {
+        type: Date,
+        select: false
     },
     stripeCustomerId: {
         type: String,

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongoose';
 import User from '@/models/User';
-import { sendEmail, getRegistrationConfirmationEmail } from '@/lib/email';
+import { sendEmail, getRegistrationConfirmationEmail, generateVerificationToken, generateVerificationCode } from '@/lib/email';
 
 export async function POST(req: Request) {
     console.log('Starting registration process...');
@@ -88,6 +88,10 @@ export async function POST(req: Request) {
             );
         }
 
+        // Generate verification token and code
+        const { token, expires } = generateVerificationToken();
+        const { code, expires: codeExpires } = generateVerificationCode();
+
         // Create user using Mongoose model
         console.log('Creating new user...');
         const user = await User.create({
@@ -96,15 +100,21 @@ export async function POST(req: Request) {
             email: email.toLowerCase().trim(),
             phoneNumber: phoneNumber?.trim(),
             password,
-            hasBookings: false
+            verificationToken: token,
+            verificationTokenExpires: expires,
+            verificationCode: code,
+            verificationCodeExpires: codeExpires,
+            isVerified: false
         });
 
-        // Send welcome email
+        // Send verification email
         try {
             const { subject, html } = getRegistrationConfirmationEmail({
                 firstName: user.firstName,
                 lastName: user.lastName,
-                email: user.email
+                email: user.email,
+                verificationToken: token,
+                verificationCode: code
             });
 
             await sendEmail({
@@ -113,40 +123,22 @@ export async function POST(req: Request) {
                 html
             });
 
-            console.log('Registration confirmation email sent successfully');
+            console.log('Verification email sent successfully');
         } catch (error) {
-            console.error('Failed to send registration confirmation email:', error);
+            console.error('Failed to send verification email:', error);
             // Don't throw error here as registration is still successful
         }
 
         console.log('User created successfully:', user._id.toString());
         return NextResponse.json({
             success: true,
-            message: 'User registered successfully',
+            message: 'Registration successful. Please check your email to verify your account.',
             userId: user._id.toString()
         });
-    } catch (error: any) {
+    } catch (error) {
         console.error('Registration error:', error);
-
-        // Handle duplicate email error
-        if (error.code === 11000) {
-            return NextResponse.json(
-                { error: 'Email already registered' },
-                { status: 409 }
-            );
-        }
-
-        // Handle validation errors
-        if (error.name === 'ValidationError') {
-            const validationErrors = Object.values(error.errors).map((err: any) => err.message);
-            return NextResponse.json(
-                { error: validationErrors.join(', ') },
-                { status: 400 }
-            );
-        }
-
         return NextResponse.json(
-            { error: 'Failed to register user' },
+            { error: 'Error registering user' },
             { status: 500 }
         );
     }
