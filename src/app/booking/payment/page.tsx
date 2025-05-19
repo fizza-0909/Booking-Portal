@@ -36,7 +36,7 @@ interface PriceBreakdown {
     tax: number;
     securityDeposit: number;
     total: number;
-    isVerified: boolean;
+    isMembershipActive: boolean;
 }
 
 interface PaymentResponse {
@@ -302,7 +302,7 @@ const PaymentPage = () => {
         tax: 0,
         securityDeposit: 0,
         total: 0,
-        isVerified: false
+        isMembershipActive: false
     });
 
     const handleProceedToPayment = async () => {
@@ -392,19 +392,19 @@ const PaymentPage = () => {
                 // Get user verification status
                 const userResponse = await fetch('/api/user/status');
                 const userData = await userResponse.json();
-                const isVerified = userData.isVerified;
+                const isMembershipActive = userData.isMembershipActive;
 
                 // Calculate price breakdown based on verification status
                 const subtotal = parsedData.totalAmount * 0.93;
                 const tax = parsedData.totalAmount * 0.035;
-                const securityDeposit = isVerified ? 0 : 250 * parsedData.rooms.length; // $250 per room for unverified users
+                const securityDeposit = isMembershipActive ? 0 : 250 * parsedData.rooms.length; // $250 per room for non-members
 
                 const priceBreakdownData = {
                     subtotal,
                     tax,
                     securityDeposit,
-                    total: subtotal + tax + securityDeposit,
-                    isVerified
+                    total: subtotal + tax + (isMembershipActive ? 0 : 250 * parsedData.rooms.length),
+                    isMembershipActive
                 };
 
                 setPriceBreakdown(priceBreakdownData);
@@ -467,7 +467,7 @@ const PaymentPage = () => {
                                     <span>Tax (3.5%)</span>
                                     <span>${priceBreakdown.tax.toFixed(2)}</span>
                                 </div>
-                                {!priceBreakdown.isVerified && (
+                                {!priceBreakdown.isMembershipActive && (
                                     <div className="flex justify-between text-gray-600">
                                         <div>
                                             <span>Security Deposit</span>

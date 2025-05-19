@@ -100,6 +100,22 @@ export async function POST(req: Request) {
                 console.log('Updated user verification status');
             }
 
+            // Update user membership status based on booking type
+            const hasMembershipBooking = bookings.some(booking => booking.bookingType === 'monthly');
+            if (hasMembershipBooking && !user.isMembershipActive) {
+                await User.findByIdAndUpdate(
+                    user._id,
+                    {
+                        $set: {
+                            isMembershipActive: true,
+                            membershipActivatedAt: new Date(),
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+                console.log('Updated user membership status to active');
+            }
+
             // Send confirmation email if user has email notifications enabled
             if (user.preferences?.emailNotifications) {
                 try {

@@ -30,13 +30,13 @@ interface BookingData {
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
 
-const calculatePriceBreakdown = (rooms: Room[], bookingType: BookingType, isVerified: boolean) => {
+const calculatePriceBreakdown = (rooms: Room[], bookingType: BookingType, isMembershipActive: boolean) => {
     // Base prices for daily bookings
     const fullDayPrice = 300;
     const halfDayPrice = 160;
 
-    // Only add security deposit if user is not verified
-    const securityDeposit = isVerified ? 0 : 250;
+    // Only add security deposit if user is not a member
+    const securityDeposit = isMembershipActive ? 0 : 250;
 
     let subtotal = 0;
 
@@ -58,7 +58,7 @@ const calculatePriceBreakdown = (rooms: Room[], bookingType: BookingType, isVeri
         tax: Math.round(tax * 100) / 100,
         securityDeposit,
         total,
-        isFirstBooking: !isVerified
+        isFirstBooking: !isMembershipActive
     };
 };
 
@@ -97,13 +97,13 @@ const SummaryPage = () => {
             setBookingType(bookingData.bookingType);
 
             // Get the verification status from the session
-            const isVerified = session?.user?.isVerified ?? false;
-            console.log('User verification status:', { isVerified });
+            const isMembershipActive = session?.user?.isMembershipActive ?? false;
+            console.log('User verification status:', { isMembershipActive });
 
             const priceBreakdownData = calculatePriceBreakdown(
                 bookingData.rooms,
                 bookingData.bookingType,
-                isVerified
+                isMembershipActive
             );
             setPriceBreakdown(priceBreakdownData);
 
@@ -117,7 +117,7 @@ const SummaryPage = () => {
             toast.error('Invalid booking data');
             router.push('/booking');
         }
-    }, [router, status, session?.user?.isVerified]);
+    }, [router, status, session?.user?.isMembershipActive]);
 
     const handleRemoveDate = (roomId: number, dateToRemove: string) => {
         if (bookingType !== 'daily') {
@@ -142,7 +142,7 @@ const SummaryPage = () => {
         }
 
         setSelectedRooms(updatedRooms);
-        const newPriceBreakdown = calculatePriceBreakdown(updatedRooms, bookingType, session?.user?.isVerified || false);
+        const newPriceBreakdown = calculatePriceBreakdown(updatedRooms, bookingType, session?.user?.isMembershipActive || false);
         setPriceBreakdown(newPriceBreakdown);
 
         const bookingData = {
@@ -205,7 +205,7 @@ const SummaryPage = () => {
                 selectedRooms,
                 bookingType,
                 priceBreakdown,
-                isVerified: session?.user?.isVerified
+                isMembershipActive: session?.user?.isMembershipActive
             });
 
             // Ensure all rooms have dates
@@ -224,11 +224,17 @@ const SummaryPage = () => {
                     rooms: selectedRooms.map(room => ({
                         id: room.id,
                         timeSlot: room.timeSlot,
-                        dates: [...room.dates] // Ensure dates are properly copied
+                        dates: room.dates.map(date => {
+                            if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                return date;
+                            }
+                            const d = new Date(date);
+                            return d.toISOString().split('T')[0];
+                        })
                     })),
                     bookingType,
                     totalAmount: priceBreakdown.total,
-                    includesSecurityDeposit: !session?.user?.isVerified
+                    includesSecurityDeposit: !session?.user?.isMembershipActive
                 }
             };
 
@@ -260,7 +266,13 @@ const SummaryPage = () => {
                     id: room.id,
                     name: `Room ${room.id}`,
                     timeSlot: room.timeSlot,
-                    dates: [...room.dates] // Ensure dates are properly copied
+                    dates: room.dates.map(date => {
+                        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                            return date;
+                        }
+                        const d = new Date(date);
+                        return d.toISOString().split('T')[0];
+                    })
                 })),
                 totalAmount: priceBreakdown.total,
                 bookingType,
@@ -386,7 +398,7 @@ const SummaryPage = () => {
                                     <span>Tax (3.5%)</span>
                                     <span>${priceBreakdown.tax.toFixed(2)}</span>
                                 </div>
-                                {!session?.user?.isVerified && (
+                                {!session?.user?.isMembershipActive && (
                                     <div className="flex justify-between text-gray-600">
                                         <div className="flex-1">
                                             <div className="flex items-center">
@@ -410,7 +422,7 @@ const SummaryPage = () => {
                                         <span>Total</span>
                                         <span className="text-blue-600">${priceBreakdown.total.toFixed(2)}</span>
                                     </div>
-                                    {!session?.user?.isVerified && (
+                                    {!session?.user?.isMembershipActive && (
                                         <p className="text-xs text-gray-500 mt-1">
                                             *Security deposit of $250 is included in the total as this is your first booking
                                         </p>

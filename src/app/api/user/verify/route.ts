@@ -7,51 +7,29 @@ import User from '@/models/User';
 export async function POST() {
     try {
         const session = await getServerSession(authOptions);
-        if (!session) {
+        if (!session?.user?.id) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        console.log('Starting user verification process for:', session.user.id);
         await dbConnect();
-
-        // Find and update user's verification status
-        const updatedUser = await User.findByIdAndUpdate(
-            session.user.id,
-            {
-                $set: {
-                    isVerified: true,
-                    updatedAt: new Date()
-                }
-            },
-            { new: true, runValidators: true }
-        );
-
-        if (!updatedUser) {
-            console.error('User not found:', session.user.id);
+        const user = await User.findById(session.user.id);
+        if (!user) {
             return NextResponse.json({ error: 'User not found' }, { status: 404 });
         }
 
-        console.log('User verified successfully:', {
-            userId: updatedUser._id,
-            isVerified: updatedUser.isVerified
-        });
+        // Set membership as active (security deposit paid)
+        user.isMembershipActive = true;
+        await user.save();
 
-        // Return the updated user data
-        return NextResponse.json({
-            message: 'User verified successfully',
-            user: {
-                id: updatedUser._id.toString(),
-                email: updatedUser.email,
-                firstName: updatedUser.firstName,
-                lastName: updatedUser.lastName,
-                name: `${updatedUser.firstName} ${updatedUser.lastName}`,
-                isVerified: updatedUser.isVerified
-            }
+        return NextResponse.json({ 
+            success: true, 
+            message: 'Membership activated successfully',
+            isMembershipActive: true
         });
     } catch (error) {
-        console.error('Error verifying user:', error);
+        console.error('Error activating membership:', error);
         return NextResponse.json(
-            { error: 'Failed to verify user' },
+            { error: 'Failed to activate membership' },
             { status: 500 }
         );
     }

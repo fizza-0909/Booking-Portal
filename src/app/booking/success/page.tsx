@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import { PRICING, TimeSlot } from '@/constants/pricing';
+import { useSession } from 'next-auth/react';
 
 interface BookingDetails {
     bookingId: string;
@@ -17,31 +18,73 @@ interface BookingDetails {
     bookingType: 'daily' | 'monthly';
     customerName: string;
     bookingDate: string;
+    status: string;
 }
 
 const SuccessPage: React.FC = () => {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const { data: session, update: updateSession } = useSession();
     const [bookingDetails, setBookingDetails] = useState<BookingDetails | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        const bookingData = localStorage.getItem('bookingData');
-        const userData = localStorage.getItem('user');
+        const confirmBooking = async () => {
+            try {
+                const bookingData = localStorage.getItem('bookingData');
+                const paymentIntentId = searchParams.get('payment_intent');
+                const paymentStatus = searchParams.get('payment_status') || 'succeeded';
 
-        if (!bookingData || !userData) {
-            router.push('/');
-            return;
-        }
+                if (!bookingData || !paymentIntentId) {
+                    throw new Error('Missing booking data or payment information');
+                }
 
-        const parsedBooking = JSON.parse(bookingData);
-        const parsedUser = JSON.parse(userData);
+                const parsedBooking = JSON.parse(bookingData);
 
-        setBookingDetails({
-            ...parsedBooking,
-            bookingId: `BK${Date.now()}`,
-            customerName: `${parsedUser.firstName} ${parsedUser.lastName}`,
-            bookingDate: new Date().toISOString()
-        });
-    }, [router]);
+                // Call the backend to confirm the booking
+                const response = await fetch('/api/bookings/confirm', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        ...parsedBooking,
+                        paymentIntentId,
+                        paymentStatus,
+                    }),
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to confirm booking');
+                }
+
+                const result = await response.json();
+                
+                // Update session to reflect new membership status
+                await updateSession();
+
+                setBookingDetails({
+                    ...parsedBooking,
+                    bookingId: result.booking._id,
+                    customerName: `${session?.user?.firstName} ${session?.user?.lastName}`,
+                    bookingDate: new Date().toISOString(),
+                    status: result.booking.status
+                });
+
+                // Clear booking data from localStorage
+                localStorage.removeItem('bookingData');
+            } catch (err) {
+                console.error('Error confirming booking:', err);
+                setError(err instanceof Error ? err.message : 'Failed to confirm booking');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        confirmBooking();
+    }, [searchParams, session, updateSession]);
 
     const handleDownload = () => {
         if (!bookingDetails) return;
@@ -67,7 +110,7 @@ const SuccessPage: React.FC = () => {
             '',
             `Booking ID: ${booking.bookingId}`,
             `Customer Name: ${booking.customerName}`,
-            `Booking Date: ${new Date(booking.bookingDate).toLocaleString()}`,
+            `Booking Date: ${formatDateSafe(booking.bookingDate)}`,
             `Booking Type: ${booking.bookingType.charAt(0).toUpperCase() + booking.bookingType.slice(1)}`,
             '',
             '=== ROOM DETAILS ===',
@@ -79,7 +122,7 @@ const SuccessPage: React.FC = () => {
             lines.push(`Time Slot: ${room.timeSlot.charAt(0).toUpperCase() + room.timeSlot.slice(1)}`);
             lines.push('Dates:');
             room.dates.forEach(date => {
-                lines.push(`  - ${new Date(date).toLocaleDateString()}`);
+                lines.push(`  - ${formatDateSafe(date)}`);
             });
             lines.push('');
         });
@@ -92,6 +135,14 @@ const SuccessPage: React.FC = () => {
         lines.push('For any queries, please contact our support team.');
 
         return lines.join('\n');
+    };
+
+    // Helper to safely format dates
+    const formatDateSafe = (dateString: string) => {
+        if (!dateString) return '';
+        const d = new Date(dateString + 'T00:00:00');
+        if (isNaN(d.getTime())) return dateString;
+        return d.toLocaleDateString();
     };
 
     if (!bookingDetails) {
@@ -129,7 +180,7 @@ const SuccessPage: React.FC = () => {
                             <div>
                                 <p className="text-sm text-gray-600">Booking Date</p>
                                 <p className="font-semibold">
-                                    {new Date(bookingDetails.bookingDate).toLocaleDateString()}
+                                    {formatDateSafe(bookingDetails.bookingDate)}
                                 </p>
                             </div>
                             <div>

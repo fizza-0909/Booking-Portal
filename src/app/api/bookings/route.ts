@@ -54,6 +54,18 @@ export async function GET(req: Request) {
                     minute: '2-digit'
                 }) : 'Date not available';
 
+                // Calculate pricing fields (fix double-counting)
+                let securityDeposit = session.user.isMembershipActive ? 0 : 250;
+                let subtotal, tax, total;
+                if (securityDeposit === 0) {
+                    subtotal = booking.totalAmount / 1.035;
+                } else {
+                    subtotal = (booking.totalAmount - securityDeposit) / 1.035;
+                }
+                subtotal = Math.round(subtotal * 100) / 100;
+                tax = Math.round(subtotal * 0.035 * 100) / 100;
+                total = Math.round((subtotal + tax + securityDeposit) * 100) / 100;
+
                 if (existingBooking) {
                     existingBooking.dates = [...new Set([...existingBooking.dates, ...formattedDates])].sort();
                 } else {
@@ -68,7 +80,11 @@ export async function GET(req: Request) {
                         totalAmount: booking.totalAmount,
                         paymentIntentId: booking.paymentIntentId,
                         createdAt: createdDate,
-                        paymentError: booking.paymentError
+                        paymentError: booking.paymentError,
+                        subtotal,
+                        tax,
+                        securityDeposit,
+                        total
                     });
                 }
             });

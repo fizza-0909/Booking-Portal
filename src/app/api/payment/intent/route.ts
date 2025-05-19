@@ -134,12 +134,16 @@ export async function POST(req: Request) {
                     enabled: true,
                 },
                 metadata: {
-                    userId: session.user.id
+                    userId: session.user.id,
+                    bookingType: bookingData.bookingType,
+                    totalAmount: (amount / 100).toString(),
+                    roomCount: bookingData.rooms.length.toString()
                 }
             });
             console.log('Created new payment intent:', {
                 id: paymentIntent.id,
-                amount: paymentIntent.amount
+                amount: paymentIntent.amount,
+                metadata: paymentIntent.metadata
             });
         }
 
@@ -156,37 +160,49 @@ export async function POST(req: Request) {
             console.log('Found existing booking:', existingBooking._id);
             booking = existingBooking;
         } else {
-            // Create new booking
+            // Create new booking with proper date handling
+            const sanitizedRooms = bookingData.rooms.map(room => ({
+                roomId: room.id.toString(),
+                name: `Room ${room.id}`,
+                timeSlot: room.timeSlot,
+                dates: room.dates.map(date => {
+                    // Get time slots based on booking type
+                    const timeSlots = (() => {
+                        switch (room.timeSlot) {
+                            case 'morning':
+                                return { startTime: '08:00', endTime: '13:00' };
+                            case 'evening':
+                                return { startTime: '14:00', endTime: '19:00' };
+                            case 'full':
+                            default:
+                                return { startTime: '08:00', endTime: '19:00' };
+                        }
+                    })();
+
+                    // Format the date string properly
+                    const formattedDate = formatDateString(date);
+
+                    return {
+                        date: formattedDate,
+                        startTime: timeSlots.startTime,
+                        endTime: timeSlots.endTime
+                    };
+                })
+            }));
+
+            // Validate dates before creating booking
+            for (const room of sanitizedRooms) {
+                for (const date of room.dates) {
+                    const bookingDate = new Date(date.date);
+                    if (isNaN(bookingDate.getTime())) {
+                        throw new Error(`Invalid date format: ${date.date}`);
+                    }
+                }
+            }
+
             booking = await Booking.create({
                 userId: session.user.id,
-                rooms: bookingData.rooms.map(room => ({
-                    roomId: room.id.toString(),  // Convert to string as required
-                    name: `Room ${room.id}`,
-                    timeSlot: room.timeSlot,
-                    dates: room.dates.map(date => {
-                        // Get time slots based on booking type
-                        const timeSlots = (() => {
-                            switch (room.timeSlot) {
-                                case 'morning':
-                                    return { startTime: '08:00', endTime: '13:00' };
-                                case 'evening':
-                                    return { startTime: '14:00', endTime: '19:00' };
-                                case 'full':
-                                default:
-                                    return { startTime: '08:00', endTime: '19:00' };
-                            }
-                        })();
-
-                        // Format the date string properly
-                        const formattedDate = formatDateString(date);
-
-                        return {
-                            date: formattedDate,
-                            startTime: timeSlots.startTime,
-                            endTime: timeSlots.endTime
-                        };
-                    })
-                })),
+                rooms: sanitizedRooms,
                 bookingType: bookingData.bookingType,
                 totalAmount: amount / 100,
                 status: 'pending',
@@ -199,19 +215,23 @@ export async function POST(req: Request) {
             console.log('Created new booking:', {
                 id: booking._id,
                 rooms: booking.rooms.length,
-                amount: booking.totalAmount
+                amount: booking.totalAmount,
+                dates: booking.rooms.map(r => r.dates.map(d => d.date))
             });
         }
 
-        // Ensure payment intent has the booking ID
-        if (!paymentIntent.metadata.bookingIds) {
+        // Ensure payment intent has the booking ID and all necessary metadata
+        if (!paymentIntent.metadata.bookingIds || !paymentIntent.metadata.bookingType) {
             await stripe.paymentIntents.update(paymentIntent.id, {
                 metadata: {
                     ...paymentIntent.metadata,
-                    bookingIds: booking._id.toString()
+                    bookingIds: booking._id.toString(),
+                    bookingType: bookingData.bookingType,
+                    totalAmount: (amount / 100).toString(),
+                    roomCount: bookingData.rooms.length.toString()
                 }
             });
-            console.log('Updated payment intent with booking ID');
+            console.log('Updated payment intent with booking metadata');
         }
 
         return NextResponse.json({

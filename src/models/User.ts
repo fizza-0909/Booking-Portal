@@ -37,6 +37,12 @@ const userSchema = new Schema({
         type: Boolean,
         default: false
     },
+    membershipActivatedAt: {
+        type: Date
+    },
+    membershipExpiresAt: {
+        type: Date
+    },
     verificationToken: {
         type: String,
         select: false
@@ -55,12 +61,17 @@ const userSchema = new Schema({
     },
     stripeCustomerId: {
         type: String,
-        sparse: true  // Allows null values and creates a sparse index
+        sparse: true,  // Allows null values and creates a sparse index
+        index: true
     },
     preferences: {
         emailNotifications: {
             type: Boolean,
             default: true
+        },
+        smsNotifications: {
+            type: Boolean,
+            default: false
         }
     },
     createdAt: {
@@ -94,6 +105,39 @@ userSchema.pre('save', async function (next) {
 userSchema.virtual('fullName').get(function () {
     return `${this.firstName} ${this.lastName}`;
 });
+
+// Add method to check if membership is active
+userSchema.methods.isMembershipValid = function() {
+    if (!this.isMembershipActive) return false;
+    if (!this.membershipExpiresAt) return true; // No expiration set
+    return new Date() < this.membershipExpiresAt;
+};
+
+// Add method to activate membership
+userSchema.methods.activateMembership = async function(durationInDays?: number) {
+    this.isMembershipActive = true;
+    this.membershipActivatedAt = new Date();
+    
+    if (durationInDays) {
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + durationInDays);
+        this.membershipExpiresAt = expiresAt;
+    }
+    
+    await this.save();
+};
+
+// Add method to deactivate membership
+userSchema.methods.deactivateMembership = async function() {
+    this.isMembershipActive = false;
+    this.membershipExpiresAt = undefined;
+    await this.save();
+};
+
+// Add indexes for common queries
+userSchema.index({ email: 1 });
+userSchema.index({ stripeCustomerId: 1 });
+userSchema.index({ isMembershipActive: 1, membershipExpiresAt: 1 });
 
 const User = models.User || model('User', userSchema);
 

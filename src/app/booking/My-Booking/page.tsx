@@ -28,6 +28,10 @@ interface Booking {
     dates: string[];
     status: 'pending' | 'confirmed' | 'failed';
     totalAmount: number;
+    subtotal: number;
+    tax: number;
+    securityDeposit: number;
+    total: number;
     paymentDetails?: {
         status: string;
         createdAt: string;
@@ -102,7 +106,7 @@ const MyBookingsPage = () => {
                 );
 
                 console.log('Security deposit status:', { hasSuccessfulPayment });
-                if (hasSuccessfulPayment && !session?.user?.isVerified) {
+                if (hasSuccessfulPayment && !session?.user?.isMembershipActive) {
                     await updateVerificationStatus();
                 }
             } catch (error) {
@@ -116,15 +120,30 @@ const MyBookingsPage = () => {
         if (status === 'authenticated') {
             fetchBookings();
         }
-    }, [status, router, session?.user?.isVerified, updateSession]);
+    }, [status, router, session?.user?.isMembershipActive, updateSession]);
 
     const formatDate = (dateStr: string) => {
+        if (!dateStr) return 'Invalid Date';
+        // Try to parse as YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            const [year, month, day] = dateStr.split('-').map(Number);
+            const date = new Date(year, month - 1, day);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+        }
+        // Fallback: try to parse as Date
         const date = new Date(dateStr);
-        return date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
+        if (!isNaN(date.getTime())) {
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+        }
+        return 'Invalid Date';
     };
 
     const getTimeSlotText = (timeSlot: 'full' | 'morning' | 'evening') => {
@@ -173,18 +192,6 @@ const MyBookingsPage = () => {
         // Store booking details in sessionStorage
         sessionStorage.setItem('bookingDetails', JSON.stringify(booking));
         router.push(`/booking/details/${booking._id}`);
-    };
-
-    const calculateTotalAmount = (booking: Booking): number => {
-        const basePrice = booking.totalAmount / booking.dates.length;
-        const subtotal = basePrice * booking.dates.length;
-        const tax = subtotal * 0.035; // 3.5% tax
-
-        // Only charge security deposit if user is not verified
-        const securityDeposit = !session?.user?.isVerified ? 250 : 0;
-
-        // Round to 2 decimal places
-        return Math.round((subtotal + tax + securityDeposit) * 100) / 100;
     };
 
     if (isLoading) {
@@ -300,31 +307,43 @@ const MyBookingsPage = () => {
                                             <div className="w-full md:w-1/4 p-6 bg-gray-50">
                                                 <div className="h-full flex flex-col justify-between">
                                                     <div>
-                                                        <p className="text-sm text-gray-600">Total Amount:</p>
-                                                        <p className="text-2xl font-bold text-blue-600 mb-4">
-                                                            ${calculateTotalAmount(booking).toFixed(2)}
-                                                        </p>
-                                                        <p className="text-xs text-gray-500">
-                                                            Includes tax and applicable security deposit
-                                                        </p>
+                                                        <div className="space-y-2">
+                                                            <div className="flex justify-between text-sm">
+                                                                <span className="text-gray-600">Subtotal:</span>
+                                                                <span className="font-medium">${booking.subtotal.toFixed(2)}</span>
+                                                            </div>
+                                                            <div className="flex justify-between text-sm">
+                                                                <span className="text-gray-600">Tax (3.5%):</span>
+                                                                <span className="font-medium">${booking.tax.toFixed(2)}</span>
+                                                            </div>
+                                                            {booking.securityDeposit > 0 && (
+                                                                <div className="flex justify-between text-sm">
+                                                                    <span className="text-gray-600">Security Deposit:</span>
+                                                                    <span className="font-medium">${booking.securityDeposit.toFixed(2)}</span>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2">
+                                                                <span className="text-gray-800">Total:</span>
+                                                                <span className="text-blue-600">${booking.total.toFixed(2)}</span>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    <div className="mt-6">
-                                                        {booking.paymentDetails?.status === 'rejected' ? (
-                                                            <button
-                                                                onClick={() => router.push('/booking')}
-                                                                className="w-full bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors duration-200"
-                                                            >
-                                                                Try New Booking
-                                                            </button>
-                                                        ) : (
-                                                            <button
-                                                                onClick={() => handleViewDetails(booking)}
-                                                                className="w-full bg-blue-100 text-blue-700 px-4 py-2 rounded-lg hover:bg-blue-200 transition-colors duration-200"
-                                                            >
-                                                                View Details
-                                                            </button>
-                                                        )}
-                                                    </div>
+                                                    
+                                                    {booking.paymentDetails?.status === 'rejected' ? (
+                                                        <button
+                                                            onClick={() => router.push('/booking')}
+                                                            className="w-full mt-4 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors duration-200"
+                                                        >
+                                                            Try New Booking
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={() => handleViewDetails(booking)}
+                                                            className="w-full mt-4 bg-blue-100 text-blue-700 px-4 py-2 rounded-lg hover:bg-blue-200 transition-colors duration-200"
+                                                        >
+                                                            View Details
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
                                         </div>

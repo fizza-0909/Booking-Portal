@@ -16,6 +16,7 @@ declare module "next-auth" {
             firstName: string;
             lastName: string;
             isEmailVerified: boolean;
+            isMembershipActive: boolean;
         }
     }
 }
@@ -29,6 +30,7 @@ declare module "next-auth/jwt" {
         firstName: string;
         lastName: string;
         isEmailVerified: boolean;
+        isMembershipActive: boolean;
     }
 }
 
@@ -89,7 +91,8 @@ export const authOptions: NextAuthOptions = {
                         name: `${freshUser.firstName} ${freshUser.lastName}`,
                         firstName: freshUser.firstName,
                         lastName: freshUser.lastName,
-                        isEmailVerified: freshUser.isEmailVerified
+                        isEmailVerified: freshUser.isEmailVerified,
+                        isMembershipActive: freshUser.isMembershipActive
                     };
                 } else {
                     session.user = {
@@ -98,7 +101,8 @@ export const authOptions: NextAuthOptions = {
                         name: token.name,
                         firstName: token.firstName,
                         lastName: token.lastName,
-                        isEmailVerified: token.isEmailVerified
+                        isEmailVerified: token.isEmailVerified,
+                        isMembershipActive: token.isMembershipActive
                     };
                 }
             }
@@ -156,7 +160,8 @@ export const authOptions: NextAuthOptions = {
                         firstName: user.firstName,
                         lastName: user.lastName,
                         name: `${user.firstName} ${user.lastName}`,
-                        isEmailVerified: user.isEmailVerified
+                        isEmailVerified: user.isEmailVerified,
+                        isMembershipActive: user.isMembershipActive
                     };
                 } catch (error) {
                     console.error('Authorization error:', error);

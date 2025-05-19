@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import BookingSummary from '@/models/BookingSummary';
 
 function VerifyEmailContent() {
     const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');

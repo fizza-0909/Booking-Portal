@@ -24,15 +24,34 @@ const bookingSchema = new Schema({
         dates: [{
             date: {
                 type: String,
-                required: true
+                required: true,
+                validate: {
+                    validator: function(v: string) {
+                        const date = new Date(v);
+                        return !isNaN(date.getTime());
+                    },
+                    message: props => `${props.value} is not a valid date`
+                }
             },
             startTime: {
                 type: String,
-                required: true
+                required: true,
+                validate: {
+                    validator: function(v: string) {
+                        return /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+                    },
+                    message: props => `${props.value} is not a valid time format (HH:MM)`
+                }
             },
             endTime: {
                 type: String,
-                required: true
+                required: true,
+                validate: {
+                    validator: function(v: string) {
+                        return /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+                    },
+                    message: props => `${props.value} is not a valid time format (HH:MM)`
+                }
             }
         }]
     }],
@@ -43,7 +62,8 @@ const bookingSchema = new Schema({
     },
     totalAmount: {
         type: Number,
-        required: true
+        required: true,
+        min: [0, 'Total amount cannot be negative']
     },
     status: {
         type: String,
@@ -57,7 +77,8 @@ const bookingSchema = new Schema({
     },
     paymentIntentId: {
         type: String,
-        sparse: true
+        sparse: true,
+        index: true
     },
     stripeCustomerId: {
         type: String,
@@ -67,7 +88,10 @@ const bookingSchema = new Schema({
         status: String,
         confirmedAt: Date,
         failedAt: Date,
-        failureMessage: String
+        failureMessage: String,
+        amount: Number,
+        currency: String,
+        paymentMethodType: String
     },
     createdAt: {
         type: Date,
@@ -84,12 +108,22 @@ const bookingSchema = new Schema({
 // Add indexes for common queries
 bookingSchema.index({ userId: 1, status: 1 });
 bookingSchema.index({ paymentIntentId: 1 });
+bookingSchema.index({ 'rooms.roomId': 1, 'rooms.dates.date': 1 });
 
 // Validate dates don't overlap for same room and time slot
 bookingSchema.pre('save', async function (next) {
     try {
         // Check each room in the booking
         for (const room of this.rooms) {
+            // Validate dates are in chronological order
+            const dates = room.dates.map(d => new Date(d.date));
+            for (let i = 1; i < dates.length; i++) {
+                if (dates[i] < dates[i-1]) {
+                    throw new Error(`Dates for room ${room.name} must be in chronological order`);
+                }
+            }
+
+            // Check for overlapping bookings
             const existingBooking = await this.constructor.findOne({
                 _id: { $ne: this._id },
                 'rooms': {
@@ -113,6 +147,20 @@ bookingSchema.pre('save', async function (next) {
         next(error);
     }
 });
+
+// Add method to check if booking is active
+bookingSchema.methods.isActive = function() {
+    return this.status === 'confirmed' && this.paymentStatus === 'succeeded';
+};
+
+// Add method to get booking duration in days
+bookingSchema.methods.getDuration = function() {
+    if (!this.rooms.length || !this.rooms[0].dates.length) return 0;
+    const dates = this.rooms[0].dates.map(d => new Date(d.date));
+    const start = new Date(Math.min(...dates.map(d => d.getTime())));
+    const end = new Date(Math.max(...dates.map(d => d.getTime())));
+    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+};
 
 export const Booking = models.Booking || model('Booking', bookingSchema);
 export default Booking; 
