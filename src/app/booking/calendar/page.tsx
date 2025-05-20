@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { useSession } from 'next-auth/react';
 import { PRICING, TimeSlot, BookingType } from '@/constants/pricing';
 import Header from '@/components/Header';
+import { calculatePrice as calculatePriceUtil } from '@/utils/price';
+import { PriceBreakdown } from '@/utils/price';
 
 interface RoomBooking {
     id: number;
@@ -255,73 +257,75 @@ const CalendarPage: React.FC = () => {
 
         // Handle monthly booking differently
         if (bookingType === 'monthly') {
-            // For monthly bookings, select all dates in the month
-            const year = date.getFullYear();
-            const month = date.getMonth();
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-            const dates = Array.from({ length: daysInMonth }, (_, i) => {
-                const newDate = new Date(year, month, i + 1);
-                return newDate.toISOString().split('T')[0];
-            }).filter(dateStr => {
-                const d = new Date(dateStr);
-                return !isWeekend(d) && !isDateBooked(d, roomId, room.timeSlot);
-            });
+            // For monthly bookings, select next 30 days from the selected date
+            const dates: string[] = [];
+            let currentDate = new Date(normalizedDate);
+            let daysAdded = 0;
+            
+            while (daysAdded < 30) {
+                if (!isWeekend(currentDate) && !isDateBooked(currentDate, roomId, room.timeSlot)) {
+                    dates.push(currentDate.toISOString().split('T')[0]);
+                    daysAdded++;
+                }
+                currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000); // Add one day
+            }
 
             setSelectedRooms(prev =>
                 prev.map(r =>
                     r.id === roomId
-                        ? { ...r, dates: dates }
+                        ? { ...r, dates }
                         : r
                 )
             );
 
             if (dates.length > 0) {
-                toast.success(`Selected ${dates.length} available dates`);
+                toast.success(`Selected ${dates.length} available dates for the next 30 business days`);
             }
-        } else {
-            // Daily booking logic
-            const year = normalizedDate.getFullYear();
-            const month = String(normalizedDate.getMonth() + 1).padStart(2, '0');
-            const day = String(normalizedDate.getDate()).padStart(2, '0');
-            const dateStr = `${year}-${month}-${day}`;
+            return;
+        }
 
-            // Check if the slot is available
-            if (!isTimeSlotAvailable(normalizedDate, roomId, room.timeSlot)) {
-                if (room.timeSlot === 'full') {
-                    toast.error('This date is not available for full day booking');
-                } else {
-                    toast.error(`This ${room.timeSlot} slot is already booked`);
-                }
-                return;
-            }
+        // Daily booking logic
+        const year = normalizedDate.getFullYear();
+        const month = String(normalizedDate.getMonth() + 1).padStart(2, '0');
+        const day = String(normalizedDate.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
 
-            // Check if the date is already selected
-            const dateIndex = room.dates?.indexOf(dateStr) ?? -1;
-            if (dateIndex === -1) {
-                // Adding new date
-                setSelectedRooms(prev =>
-                    prev.map(r => {
-                        if (r.id === roomId) {
-                            const newDates = [...(r.dates || []), dateStr];
-                            return { ...r, dates: newDates };
-                        }
-                        return r;
-                    })
-                );
-                toast.success(`Selected ${room.timeSlot} slot for ${formatDisplayDate(dateStr)}`);
+        // Check if the slot is available
+        if (!isTimeSlotAvailable(normalizedDate, roomId, room.timeSlot)) {
+            if (room.timeSlot === 'full') {
+                toast.error('This date is not available for full day booking');
             } else {
-                // Removing date
-                setSelectedRooms(prev =>
-                    prev.map(r => {
-                        if (r.id === roomId) {
-                            const newDates = r.dates?.filter(d => d !== dateStr) || [];
-                            return { ...r, dates: newDates };
-                        }
-                        return r;
-                    })
-                );
-                toast.success(`Removed ${room.timeSlot} slot for ${formatDisplayDate(dateStr)}`);
+                toast.error(`This ${room.timeSlot} slot is already booked`);
             }
+            return;
+        }
+
+        // Check if the date is already selected
+        const dateIndex = room.dates?.indexOf(dateStr) ?? -1;
+        if (dateIndex === -1) {
+            // Adding new date
+            setSelectedRooms(prev =>
+                prev.map(r => {
+                    if (r.id === roomId) {
+                        const newDates = [...(r.dates || []), dateStr];
+                        return { ...r, dates: newDates };
+                    }
+                    return r;
+                })
+            );
+            toast.success(`Selected ${room.timeSlot} slot for ${formatDisplayDate(dateStr)}`);
+        } else {
+            // Removing date
+            setSelectedRooms(prev =>
+                prev.map(r => {
+                    if (r.id === roomId) {
+                        const newDates = r.dates?.filter(d => d !== dateStr) || [];
+                        return { ...r, dates: newDates };
+                    }
+                    return r;
+                })
+            );
+            toast.success(`Removed ${room.timeSlot} slot for ${formatDisplayDate(dateStr)}`);
         }
 
         // Save to sessionStorage
@@ -465,30 +469,63 @@ const CalendarPage: React.FC = () => {
         }
     };
 
-    const calculatePrice = () => {
-        let subtotal = 0;
-        const fullDayPrice = 300;
-        const halfDayPrice = 160;
-        const monthlyFullDayPrice = 2000;
-        const monthlyHalfDayPrice = 1200;
-        selectedRooms.forEach(room => {
-            const numberOfDays = room.dates?.length || 0;
-            if (numberOfDays === 0) return; // Skip rooms with no dates selected
-            if (bookingType === 'daily') {
-                const basePrice = room.timeSlot === 'full' ? fullDayPrice : halfDayPrice;
-                subtotal += basePrice * numberOfDays;
-            } else {
-                subtotal += room.timeSlot === 'full' ? monthlyFullDayPrice : monthlyHalfDayPrice;
+    const calculatePrice = (): PriceBreakdown | null => {
+        try {
+            const selectedRoomsWithDates = selectedRooms.filter(room => room.dates && room.dates.length > 0);
+            if (selectedRoomsWithDates.length === 0) return null;
+
+            // Get membership status from session
+            const isMembershipActive = session?.user?.isMembershipActive || false;
+            console.log('Calculating price with membership status:', isMembershipActive);
+
+            const priceBreakdown = calculatePriceUtil(selectedRoomsWithDates, bookingType, isMembershipActive);
+            console.log('Price breakdown:', priceBreakdown);
+            return priceBreakdown;
+        } catch (error) {
+            console.error('Error calculating price:', error);
+            return null;
+        }
+    };
+
+    const handleProceed = async () => {
+        try {
+            const selectedRoomsWithDates = selectedRooms.filter(room => room.dates && room.dates.length > 0);
+            if (selectedRoomsWithDates.length === 0) {
+                toast.error('Please select dates for at least one room');
+                return;
             }
-        });
-        const tax = subtotal * 0.035;
-        const securityDeposit = session?.user?.isMembershipActive ? 0 : 250;
-        return {
-            subtotal,
-            tax,
-            securityDeposit,
-            total: subtotal + tax + securityDeposit
-        };
+
+            // Get membership status from session
+            const isMembershipActive = session?.user?.isMembershipActive || false;
+            console.log('Processing booking with membership status:', isMembershipActive);
+
+            const priceBreakdown = calculatePriceUtil(selectedRoomsWithDates, bookingType, isMembershipActive);
+            if (!priceBreakdown) {
+                toast.error('Error calculating price');
+                return;
+            }
+
+            const bookingData = {
+                rooms: selectedRoomsWithDates.map(room => ({
+                    ...room,
+                    name: room.name || `Room ${room.id}` // Ensure room name is included
+                })),
+                bookingType,
+                totalAmount: priceBreakdown.total,
+                isMembershipActive, // Include membership status in booking data
+                priceBreakdown // Include full price breakdown
+            };
+
+            // Store booking data for summary page
+            sessionStorage.setItem('bookingData', JSON.stringify(bookingData));
+            console.log('Stored booking data:', bookingData);
+
+            toast.success('Proceeding to booking summary...');
+            router.push('/booking/summary');
+        } catch (error) {
+            console.error('Error proceeding to summary:', error);
+            toast.error(error instanceof Error ? error.message : 'Failed to proceed to summary');
+        }
     };
 
     const handleRemoveRoom = (roomId: number) => {
@@ -644,92 +681,13 @@ const CalendarPage: React.FC = () => {
         return 'bg-white hover:bg-blue-50 cursor-pointer';
     };
 
-    const handleProceed = async () => {
-        if (!session) {
-            toast.error('Please login to continue');
-            router.push('/');
-            return;
-        }
-
-        // Filter rooms that have dates selected
-        const roomsWithDates = selectedRooms.filter(room => room.dates && room.dates.length > 0);
-        const roomsWithoutDates = selectedRooms.filter(room => !room.dates || room.dates.length === 0);
-
-        // Check if at least one room has dates
-        if (roomsWithDates.length === 0) {
-            toast.error('Please select dates for at least one room');
-            return;
-        }
-
-        try {
-            // Calculate time slots based on room.timeSlot
-            const getTimeSlot = (timeSlot: TimeSlot) => {
-                switch (timeSlot) {
-                    case 'morning':
-                        return { startTime: '08:00', endTime: '13:00' };
-                    case 'evening':
-                        return { startTime: '14:00', endTime: '19:00' };
-                    case 'full':
-                    default:
-                        return { startTime: '08:00', endTime: '19:00' };
-                }
-            };
-
-            // Validate and format dates before storing
-            const validateAndFormatDate = (dateStr: string): string => {
-                try {
-                    const [year, month, day] = dateStr.split('-').map(Number);
-                    if (!year || !month || !day || isNaN(year) || isNaN(month) || isNaN(day)) {
-                        throw new Error('Invalid date components');
-                    }
-                    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                } catch (error) {
-                    console.error('Error formatting date:', error);
-                    throw new Error(`Invalid date format: ${dateStr}`);
-                }
-            };
-
-            // Only include rooms that have dates selected in the booking data
-            const bookingData = {
-                rooms: roomsWithDates.map(room => {
-                    const timeSlotHours = getTimeSlot(room.timeSlot);
-                    return {
-                        id: room.id,
-                        name: `Room ${room.id}`,
-                        timeSlot: room.timeSlot,
-                        dates: room.dates.map(date => validateAndFormatDate(date))
-                    };
-                }),
-                bookingType,
-                totalAmount: calculatePrice().total,
-                status: 'pending',
-                paymentStatus: 'pending'
-            };
-
-            // Store in sessionStorage
-            sessionStorage.setItem('bookingData', JSON.stringify(bookingData));
-            sessionStorage.removeItem('selectedRooms');
-            sessionStorage.removeItem('bookingType');
-
-            // Show warning if some rooms don't have dates
-            if (roomsWithoutDates.length > 0) {
-                toast(`${roomsWithoutDates.length} room(s) without dates will not be included in the booking`, {
-                    duration: 4000,
-                    icon: '⚠️',
-                    style: {
-                        background: '#fff7ed',
-                        color: '#9a3412',
-                        border: '1px solid #fdba74'
-                    }
-                });
-            }
-
-            toast.success('Proceeding to booking summary...');
-            router.push('/booking/summary');
-        } catch (error) {
-            console.error('Error preparing booking data:', error);
-            toast.error('Failed to prepare booking data');
-        }
+    // Add new helper function after isWeekend
+    const isPastDate = (date: Date | null): boolean => {
+        if (!date) return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        date.setHours(0, 0, 0, 0);
+        return date < today;
     };
 
     const renderTimeSlotButtons = (room: RoomBooking) => {
@@ -740,13 +698,6 @@ const CalendarPage: React.FC = () => {
         }) || [];
 
         const hasConflictingDates = conflictingDates.length > 0;
-        const formattedConflictingDates = conflictingDates.map(date =>
-            new Date(date).toLocaleDateString('en-US', {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric'
-            })
-        ).join('\n');
 
         return (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -819,15 +770,6 @@ const CalendarPage: React.FC = () => {
                 </button>
             </div>
         );
-    };
-
-    // Add new helper function after isWeekend
-    const isPastDate = (date: Date | null): boolean => {
-        if (!date) return false;
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        date.setHours(0, 0, 0, 0);
-        return date < today;
     };
 
     // Show loading state while checking authentication or initializing
@@ -1144,44 +1086,54 @@ const CalendarPage: React.FC = () => {
                                                 <span>× {selectedRooms.reduce((total, room) => total + (room.dates?.length || 0), 0)}</span>
                                             </div>
                                         )}
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span>Subtotal:</span>
-                                            <span>${calculatePrice().subtotal.toFixed(2)}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm text-gray-600">
-                                            <span>Tax (3.5%):</span>
-                                            <span>+ ${calculatePrice().tax.toFixed(2)}</span>
-                                        </div>
-                                        {!session?.user?.isMembershipActive && (
-                                            <div className="flex justify-between items-center text-sm text-gray-600">
-                                                <div className="flex-1">
-                                                    <div className="flex items-center">
-                                                        <span>Security Deposit</span>
-                                                        <div className="ml-2 group relative">
-                                                            <svg className="w-4 h-4 text-gray-400 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                                            </svg>
-                                                            <div className="hidden group-hover:block absolute left-0 bottom-full mb-2 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg">
-                                                                Security deposit is only charged for your first booking. It will be refunded according to our policy.
-                                                            </div>
-                                                        </div>
+                                        {/* Price Breakdown */}
+                                        {(() => {
+                                            const priceBreakdown = calculatePrice();
+                                            if (!priceBreakdown) return null;
+
+                                            return (
+                                                <>
+                                                    <div className="flex justify-between items-center text-sm">
+                                                        <span>Subtotal:</span>
+                                                        <span>${priceBreakdown.subtotal.toFixed(2)}</span>
                                                     </div>
-                                                    <div className="text-xs text-blue-600 font-medium">First Booking Only - Refundable</div>
-                                                </div>
-                                                <span>+ ${calculatePrice().securityDeposit.toFixed(2)}</span>
-                                            </div>
-                                        )}
-                                        <div className="border-t border-gray-200 pt-3">
-                                            <div className="flex justify-between items-center text-lg font-semibold">
-                                                <span>Total Price:</span>
-                                                <span className="text-blue-600">${calculatePrice().total.toFixed(2)}</span>
-                                            </div>
-                                            {!session?.user?.isMembershipActive && (
-                                                <p className="text-xs text-gray-500 mt-1">
-                                                    *A refundable security deposit of $250 will be charged as this is your first booking
-                                                </p>
-                                            )}
-                                        </div>
+                                                    <div className="flex justify-between items-center text-sm text-gray-600">
+                                                        <span>Tax (3.5%):</span>
+                                                        <span>+ ${priceBreakdown.tax.toFixed(2)}</span>
+                                                    </div>
+                                                    {!session?.user?.isMembershipActive && (
+                                                        <div className="flex justify-between items-center text-sm text-gray-600">
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center">
+                                                                    <span>Security Deposit</span>
+                                                                    <div className="ml-2 group relative">
+                                                                        <svg className="w-4 h-4 text-gray-400 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                                        </svg>
+                                                                        <div className="hidden group-hover:block absolute left-0 bottom-full mb-2 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg">
+                                                                            Security deposit is only charged for your first booking. It will be refunded according to our policy.
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-xs text-blue-600 font-medium">First Booking Only - Refundable</div>
+                                                            </div>
+                                                            <span>+ ${priceBreakdown.securityDeposit.toFixed(2)}</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="border-t border-gray-200 pt-3">
+                                                        <div className="flex justify-between items-center text-lg font-semibold">
+                                                            <span>Total Price:</span>
+                                                            <span className="text-blue-600">${priceBreakdown.total.toFixed(2)}</span>
+                                                        </div>
+                                                        {!session?.user?.isMembershipActive && (
+                                                            <p className="text-xs text-gray-500 mt-1">
+                                                                *A refundable security deposit of $250 will be charged as this is your first booking
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
 
                                     {/* Proceed Button */}

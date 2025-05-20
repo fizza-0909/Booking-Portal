@@ -41,6 +41,8 @@ const SuccessPageContent: React.FC = () => {
     const [bookingDetails, setBookingDetails] = useState<BookingDetails | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [showAnimation, setShowAnimation] = useState(true);
+    const { status } = useSession();
 
     useEffect(() => {
         // Refresh session on mount to get latest verification status
@@ -50,6 +52,7 @@ const SuccessPageContent: React.FC = () => {
     useEffect(() => {
         const confirmBooking = async () => {
             try {
+                console.log('Starting booking confirmation process...');
                 const bookingData = localStorage.getItem('bookingData');
                 const paymentIntentId = searchParams.get('payment_intent');
                 const paymentStatus = searchParams.get('payment_status') || 'succeeded';
@@ -58,9 +61,32 @@ const SuccessPageContent: React.FC = () => {
                     throw new Error('Missing booking data or payment information');
                 }
 
+                console.log('Payment info:', { paymentIntentId, paymentStatus });
                 const parsedBooking = JSON.parse(bookingData);
 
-                // Call the backend to confirm the booking
+                // First, verify the payment and update membership status
+                console.log('Verifying payment...');
+                const verifyResponse = await fetch('/api/payment/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        clientSecret: paymentIntentId + '_secret_' + Math.random().toString(36).substring(7)
+                    }),
+                });
+
+                if (!verifyResponse.ok) {
+                    console.error('Failed to verify payment status');
+                    const errorData = await verifyResponse.json();
+                    console.error('Verification error:', errorData);
+                } else {
+                    const verifyResult = await verifyResponse.json();
+                    console.log('Payment verification result:', verifyResult);
+                }
+
+                // Then confirm the booking
+                console.log('Confirming booking...');
                 const response = await fetch('/api/bookings/confirm', {
                     method: 'POST',
                     headers: {
@@ -79,30 +105,35 @@ const SuccessPageContent: React.FC = () => {
                 }
 
                 const result = await response.json();
+                console.log('Booking confirmation result:', result);
                 
                 // Update session to reflect new membership status
+                console.log('Updating session...');
                 await update();
-
-                setBookingDetails({
-                    ...parsedBooking,
-                    bookingId: result.booking._id,
-                    customerName: `${session?.user?.firstName} ${session?.user?.lastName}`,
-                    bookingDate: new Date().toISOString(),
-                    status: result.booking.status
-                });
+                console.log('Session updated');
 
                 // Clear booking data from localStorage
                 localStorage.removeItem('bookingData');
-            } catch (err) {
-                console.error('Error confirming booking:', err);
-                setError(err instanceof Error ? err.message : 'Failed to confirm booking');
+                
+                setBookingDetails(result.booking);
+
+                // Force a page reload after 2 seconds to ensure all states are updated
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+            } catch (error) {
+                console.error('Error confirming booking:', error);
+                setError(error instanceof Error ? error.message : 'Failed to confirm booking');
             } finally {
                 setIsLoading(false);
+                setShowAnimation(false);
             }
         };
 
-        confirmBooking();
-    }, [searchParams, session, update]);
+        if (status === 'authenticated') {
+            confirmBooking();
+        }
+    }, [status, searchParams, update]);
 
     const handleDownload = () => {
         if (!bookingDetails) return;

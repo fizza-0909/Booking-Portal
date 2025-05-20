@@ -70,60 +70,98 @@ export async function sendEmail({ to, subject, html }: EmailOptions) {
 }
 
 // Email templates
-export function getBookingConfirmationEmail(booking: any) {
+export function getBookingConfirmationEmail({
+    customerName,
+    bookingId,
+    bookingType,
+    totalAmount,
+    rooms
+}: {
+    customerName: string;
+    bookingId: string;
+    bookingType: string;
+    totalAmount: number;
+    rooms: Array<{
+        roomId: string;
+        name: string;
+        timeSlot: string;
+        dates: Array<{
+            date: string;
+            startTime: string;
+            endTime: string;
+        }>;
+    }>;
+}) {
     const formatDate = (dateStr: string) => {
-        try {
-            const date = new Date(dateStr);
-            return date.toLocaleDateString('en-US', {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric',
-                year: 'numeric'
-            });
-        } catch (error) {
-            console.error('Error formatting date:', error);
-            return dateStr;
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    };
+
+    const getTimeSlotText = (timeSlot: string) => {
+        switch (timeSlot) {
+            case 'morning':
+                return 'Morning (8:00 AM - 12:00 PM)';
+            case 'evening':
+                return 'Evening (1:00 PM - 5:00 PM)';
+            case 'full':
+                return 'Full Day (8:00 AM - 5:00 PM)';
+            default:
+                return timeSlot;
         }
     };
 
-    return {
-        subject: 'Booking Confirmation - Hire a Clinic',
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <h1 style="color: #3b82f6; text-align: center;">Booking Confirmation</h1>
-                <p>Dear ${booking.customerName},</p>
-                <p>Thank you for booking with Hire a Clinic. Your booking has been confirmed.</p>
-                
-                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                    <h2 style="color: #1f2937; margin-top: 0;">Booking Details</h2>
-                    <p><strong>Booking ID:</strong> ${booking.bookingId}</p>
-                    <p><strong>Booking Type:</strong> ${booking.bookingType}</p>
-                    <p><strong>Total Amount:</strong> $${booking.totalAmount.toFixed(2)}</p>
-                    
-                    <h3 style="color: #1f2937;">Room Details</h3>
-                    ${booking.rooms.map((room: any) => `
-                        <div style="margin-bottom: 15px; border-left: 3px solid #3b82f6; padding-left: 10px;">
-                            <p><strong>Room:</strong> ${room.name}</p>
-                            <p><strong>Time Slot:</strong> ${room.timeSlot}</p>
-                            <p><strong>Dates:</strong></p>
-                            <ul style="margin: 5px 0; padding-left: 20px;">
-                                ${room.dates.map((date: string) => `
-                                    <li style="margin: 3px 0;">${formatDate(date)}</li>
-                                `).join('')}
-                            </ul>
-                        </div>
+    const roomDetails = rooms.map(room => `
+        <div style="margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+            <h3 style="margin: 0 0 10px 0; color: #2c3e50;">${room.name}</h3>
+            <p style="margin: 5px 0; color: #34495e;"><strong>Time Slot:</strong> ${getTimeSlotText(room.timeSlot)}</p>
+            <div style="margin-top: 10px;">
+                <p style="margin: 5px 0; color: #34495e;"><strong>Dates:</strong></p>
+                <ul style="list-style-type: none; padding-left: 0;">
+                    ${room.dates.map(date => `
+                        <li style="margin: 5px 0; color: #34495e;">
+                            ${formatDate(date.date)} (${date.startTime} - ${date.endTime})
+                        </li>
                     `).join('')}
-                </div>
+                </ul>
+            </div>
+        </div>
+    `).join('');
+
+    const subject = `Booking Confirmation - Hire a Clinic`;
+
+    const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2c3e50; margin-bottom: 20px;">Dear ${customerName},</h2>
+            
+            <p style="color: #34495e; line-height: 1.5;">Thank you for booking with Hire a Clinic. Your booking has been confirmed.</p>
+
+            <div style="margin: 30px 0; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h3 style="color: #2c3e50; margin-bottom: 15px;">Booking Details</h3>
                 
-                <p>For any questions or assistance, please don't hesitate to contact us.</p>
-                
-                <div style="text-align: center; margin-top: 30px; color: #6b7280;">
-                    <p>Hire a Clinic</p>
-                    <p>2140 N Lake Forest Dr #100, McKinney, TX 75071</p>
+                <p style="margin: 5px 0; color: #34495e;"><strong>Booking ID:</strong> ${bookingId}</p>
+                <p style="margin: 5px 0; color: #34495e;"><strong>Booking Type:</strong> ${bookingType.charAt(0).toUpperCase() + bookingType.slice(1)}</p>
+                <p style="margin: 5px 0; color: #34495e;"><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+
+                <div style="margin-top: 20px;">
+                    <h3 style="color: #2c3e50; margin-bottom: 15px;">Room Details</h3>
+                    ${roomDetails}
                 </div>
             </div>
-        `
-    };
+
+            <p style="color: #34495e; line-height: 1.5;">If you have any questions or need to make changes to your booking, please contact our support team.</p>
+
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #7f8c8d; font-size: 12px;">
+                <p>This is an automated email. Please do not reply to this message.</p>
+            </div>
+        </div>
+    `;
+
+    return { subject, html };
 }
 
 export function getBookingReminderEmail(booking: any) {

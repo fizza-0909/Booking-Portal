@@ -9,185 +9,188 @@ import BookingSummary from '@/models/BookingSummary';
 
 export async function POST(req: Request) {
     try {
+        console.log('Starting booking confirmation process...');
+        
         const session = await getServerSession(authOptions);
-        if (!session) {
+        if (!session?.user?.id) {
+            console.error('No session or user ID found');
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        await dbConnect();
-        const body = await req.json();
-        const { paymentIntentId, paymentStatus, paymentDetails } = body;
-
-        // 1. Validate and sanitize incoming data
-        if (!paymentIntentId || !paymentStatus || !body.rooms || !Array.isArray(body.rooms)) {
-            return NextResponse.json(
-                { error: 'Missing or invalid required payment/booking information' },
-                { status: 400 }
-            );
-        }
-
-        // 2. Fix all dates in the rooms array before saving
-        const sanitizedRooms = body.rooms.map((room: any) => {
-            if (!room.dates || !Array.isArray(room.dates)) {
-                console.error('Invalid room dates:', room);
-                throw new Error('Invalid room dates format');
-            }
-            return {
-                ...room,
-                dates: room.dates.map((d: any) => {
-                    let dateStr = d.date || d;
-                    if (!dateStr) {
-                        console.error('Missing date:', d);
-                        throw new Error('Missing date in room booking');
-                    }
-                    
-                    // Handle string dates
-                    if (typeof dateStr === 'string') {
-                        // If already in YYYY-MM-DD format, use as is
-                        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                            return { ...d, date: dateStr };
-                        }
-                        // Try to parse and format
-                        const dt = new Date(dateStr);
-                        if (isNaN(dt.getTime())) {
-                            console.error('Invalid date string:', dateStr);
-                            throw new Error('Invalid date format');
-                        }
-                        return { ...d, date: dt.toISOString().split('T')[0] };
-                    }
-                    
-                    // Handle Date objects
-                    if (dateStr instanceof Date) {
-                        return { ...d, date: dateStr.toISOString().split('T')[0] };
-                    }
-                    
-                    console.error('Unsupported date format:', dateStr);
-                    throw new Error('Unsupported date format');
-                })
-            };
+        console.log('Session user:', {
+            userId: session.user.id,
+            email: session.user.email
         });
 
-        // 3. Only update trusted fields
-        let booking;
-        try {
-            booking = await Booking.findOneAndUpdate(
-                { paymentIntentId },
+        const body = await req.json();
+        const { paymentIntentId, paymentStatus, rooms, bookingType, totalAmount } = body;
+
+        // Add more detailed validation
+        if (!paymentIntentId) {
+            console.error('Missing paymentIntentId');
+            return NextResponse.json({ error: 'Payment Intent ID is required' }, { status: 400 });
+        }
+
+        if (!paymentStatus) {
+            console.error('Missing paymentStatus');
+            return NextResponse.json({ error: 'Payment status is required' }, { status: 400 });
+        }
+
+        if (!rooms || !Array.isArray(rooms) || rooms.length === 0) {
+            console.error('Invalid or empty rooms array:', rooms);
+            return NextResponse.json({ error: 'Valid rooms array is required' }, { status: 400 });
+        }
+
+        // Validate each room has required properties
+        for (const room of rooms) {
+            if (!room.id || !room.name || !room.timeSlot || !room.dates || !Array.isArray(room.dates)) {
+                console.error('Invalid room data:', room);
+                return NextResponse.json({ 
+                    error: 'Each room must have id, name, timeSlot, and dates array' 
+                }, { status: 400 });
+            }
+        }
+
+        if (!bookingType || !['daily', 'monthly'].includes(bookingType)) {
+            console.error('Invalid bookingType:', bookingType);
+            return NextResponse.json({ error: 'Valid booking type is required' }, { status: 400 });
+        }
+
+        if (typeof totalAmount !== 'number' || totalAmount < 0) {
+            console.error('Invalid totalAmount:', totalAmount);
+            return NextResponse.json({ error: 'Valid total amount is required' }, { status: 400 });
+        }
+
+        await dbConnect();
+        console.log('Connected to database');
+
+        // Get user details
+        const user = await User.findById(session.user.id);
+        if (!user) {
+            console.error('User not found:', session.user.id);
+            return NextResponse.json({ error: 'User not found' }, { status: 404 });
+        }
+
+        console.log('Current user status:', {
+            userId: user._id,
+            isMembershipActive: user.isMembershipActive
+        });
+
+        // Process room data
+        const sanitizedRooms = rooms.map(room => {
+            try {
+                // Get time slots based on booking type
+                const getTimeSlotHours = (timeSlot: string) => {
+                    switch (timeSlot) {
+                        case 'morning':
+                            return { startTime: '08:00', endTime: '12:00' };
+                        case 'evening':
+                            return { startTime: '13:00', endTime: '17:00' };
+                        case 'full':
+                            return { startTime: '08:00', endTime: '17:00' };
+                        default:
+                            throw new Error(`Invalid time slot: ${timeSlot}`);
+                    }
+                };
+
+                if (!room.id || typeof room.id !== 'string') {
+                    throw new Error('Invalid room ID');
+                }
+
+                const timeSlotHours = getTimeSlotHours(room.timeSlot);
+
+                // Validate dates array
+                if (!Array.isArray(room.dates) || room.dates.length === 0) {
+                    throw new Error('Room dates must be a non-empty array');
+                }
+
+                const processedDates = room.dates.map(date => {
+                    // Handle string dates
+                    const dateStr = typeof date === 'string' ? date : date?.date;
+                    if (!dateStr || typeof dateStr !== 'string') {
+                        throw new Error('Invalid date format');
+                    }
+
+                    // Validate date string
+                    const dateObj = new Date(dateStr);
+                    if (isNaN(dateObj.getTime())) {
+                        throw new Error(`Invalid date: ${dateStr}`);
+                    }
+
+                    // Ensure date is in YYYY-MM-DD format
+                    const formattedDate = dateObj.toISOString().split('T')[0];
+
+                    return {
+                        date: formattedDate,
+                        startTime: timeSlotHours.startTime,
+                        endTime: timeSlotHours.endTime
+                    };
+                });
+
+                return {
+                    roomId: room.id.toString(),
+                    name: room.name || `Room ${room.id}`,
+                    timeSlot: room.timeSlot,
+                    dates: processedDates
+                };
+            } catch (error) {
+                console.error('Error processing room data:', error);
+                throw new Error(`Error processing room ${room.id}: ${error.message}`);
+            }
+        });
+
+        console.log('Processed room data:', sanitizedRooms);
+
+        // If payment succeeded, update user membership status
+        if (paymentStatus === 'succeeded' && !user.isMembershipActive) {
+            console.log('Updating user membership status...');
+            const updatedUser = await User.findByIdAndUpdate(
+                user._id,
                 {
                     $set: {
-                        userId: session.user.id,
-                        rooms: sanitizedRooms,
-                        bookingType: body.bookingType,
-                        totalAmount: body.totalAmount,
-                        status: paymentStatus === 'succeeded' ? 'confirmed' : 'pending',
-                        paymentStatus,
-                        paymentDetails: {
-                            ...paymentDetails,
-                            lastUpdated: new Date()
-                        },
+                        isMembershipActive: true,
+                        membershipActivatedAt: new Date(),
                         updatedAt: new Date()
                     }
                 },
-                {
-                    new: true,
-                    runValidators: true
-                }
+                { new: true }
             );
-            console.log('Booking found and updated:', booking ? booking._id : null);
-        } catch (err) {
-            console.error('Error finding/updating booking:', err);
-            return NextResponse.json({ error: 'Failed to update booking', details: err instanceof Error ? err.message : err }, { status: 500 });
+
+            console.log('Updated user membership status:', {
+                userId: updatedUser._id,
+                isMembershipActive: updatedUser.isMembershipActive,
+                membershipActivatedAt: updatedUser.membershipActivatedAt
+            });
         }
 
-        if (!booking) {
-            console.error('Booking not found for paymentIntentId:', paymentIntentId);
-            return NextResponse.json({ error: 'Booking not found for paymentIntentId' }, { status: 404 });
-        }
+        // Update or create booking
+        const booking = await Booking.findOneAndUpdate(
+            { paymentIntentId },
+            {
+                $set: {
+                    userId: session.user.id,
+                    rooms: sanitizedRooms,
+                    bookingType: bookingType || 'daily',
+                    totalAmount: totalAmount || 0,
+                    status: paymentStatus === 'succeeded' ? 'confirmed' : 'pending',
+                    paymentStatus,
+                    paymentDetails: {
+                        status: paymentStatus,
+                        updatedAt: new Date()
+                    },
+                    isMembershipActive: user.isMembershipActive,
+                    updatedAt: new Date()
+                }
+            },
+            { new: true, upsert: true }
+        );
 
-        console.log('Booking status updated:', {
+        console.log('Updated booking:', {
             bookingId: booking._id,
             status: booking.status,
-            paymentStatus: booking.paymentStatus
-        });
-
-        // Get user details and handle verification
-        let user;
-        try {
-            user = await User.findById(session.user.id);
-            console.log('User found:', user ? user._id : null);
-        } catch (err) {
-            console.error('Error finding user:', err);
-            throw err;
-        }
-        if (!user) {
-            console.error('User not found for id:', session.user.id);
-            throw new Error('User not found');
-        }
-
-        // Debug log before membership update
-        console.log('DEBUG: paymentStatus:', paymentStatus, 'user.isMembershipActive:', user.isMembershipActive);
-        // Always update user membership status if payment succeeded and user is not already activated
-        if (paymentStatus === 'succeeded' && !user.isMembershipActive) {
-            try {
-                // Update user membership status
-                await User.findByIdAndUpdate(
-                    user._id,
-                    {
-                        $set: {
-                            isMembershipActive: true,
-                            membershipActivatedAt: new Date(),
-                            updatedAt: new Date()
-                        }
-                    },
-                    { new: true }
-                );
-
-                // Update the user object for email sending
-                user.isMembershipActive = true;
-                user.membershipActivatedAt = new Date();
-                
-                console.log('User membership status activated after first payment:', {
-                    userId: user._id,
-                    isMembershipActive: true,
-                    membershipActivatedAt: new Date()
-                });
-            } catch (err) {
-                console.error('Failed to update user membership status:', err);
-            }
-        }
-
-        // Format dates for email
-        const formattedRooms = booking.rooms.map((room: any) => {
-            // Ensure dates array exists and is properly formatted
-            const formattedDates = room.dates.map((date: any) => {
-                // Handle both string dates and date objects
-                const dateStr = typeof date === 'object' ? date.date : date;
-                if (!dateStr) {
-                    console.error('Invalid date format:', date);
-                    return null;
-                }
-
-                // Try to parse and format the date
-                try {
-                    if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-                        return dateStr;
-                    }
-                    const dt = new Date(dateStr);
-                    if (isNaN(dt.getTime())) {
-                        console.error('Invalid date:', dateStr);
-                        return null;
-                    }
-                    return dt.toISOString().split('T')[0];
-                } catch (error) {
-                    console.error('Error formatting date:', error);
-                    return null;
-                }
-            }).filter(Boolean); // Remove any null values
-
-            return {
-                name: room.name,
-                timeSlot: room.timeSlot,
-                dates: formattedDates
-            };
+            paymentStatus: booking.paymentStatus,
+            isMembershipActive: booking.isMembershipActive,
+            rooms: booking.rooms
         });
 
         // Send confirmation email if payment succeeded
@@ -197,8 +200,8 @@ export async function POST(req: Request) {
                     customerName: `${user.firstName} ${user.lastName}`,
                     bookingId: booking._id,
                     bookingType: booking.bookingType,
-                    totalAmount: paymentDetails?.amount || 0,
-                    rooms: formattedRooms
+                    totalAmount: booking.totalAmount,
+                    rooms: sanitizedRooms
                 });
 
                 await sendEmail({
@@ -210,53 +213,21 @@ export async function POST(req: Request) {
                 console.log('Booking confirmation email sent successfully');
             } catch (error) {
                 console.error('Failed to send booking confirmation email:', error);
-                // Don't throw error here as booking is still successful
             }
         }
-
-        // Ensure all booking room dates are stored as ISO strings (YYYY-MM-DD)
-        let datesFixed = false;
-        if (booking.rooms && Array.isArray(booking.rooms)) {
-            booking.rooms.forEach((room: any) => {
-                if (room.dates && Array.isArray(room.dates)) {
-                    room.dates = room.dates.map((d: any) => {
-                        let dateStr = d.date || d;
-                        if (typeof dateStr === 'string' && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                            return { ...d, date: dateStr };
-                        }
-                        const dt = new Date(dateStr);
-                        datesFixed = true;
-                        return { ...d, date: dt.toISOString().split('T')[0] };
-                    });
-                }
-            });
-            if (datesFixed) {
-                await booking.save();
-                console.log('Fixed and saved booking dates as ISO strings.');
-            }
-        }
-
-        // Create a booking summary document
-        await BookingSummary.create({
-            bookingId: booking._id.toString(),
-            userId: session.user.id,
-            totalAmount: booking.totalAmount,
-            status: booking.status,
-            createdAt: booking.createdAt
-        });
 
         return NextResponse.json({
-            message: 'Booking processed successfully',
+            message: 'Booking confirmed successfully',
             booking,
-            status: booking.status
+            membershipStatus: {
+                isMembershipActive: user.isMembershipActive,
+                activatedAt: user.membershipActivatedAt
+            }
         });
     } catch (error) {
         console.error('Error confirming booking:', error);
         return NextResponse.json(
-            {
-                error: 'Failed to confirm booking',
-                details: error instanceof Error ? error.message : 'Unknown error'
-            },
+            { error: 'Failed to confirm booking' },
             { status: 500 }
         );
     }

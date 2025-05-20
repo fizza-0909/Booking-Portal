@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongoose';
-import { Booking } from '@/models/Booking';
+import Booking from '@/models/Booking';
 import type { Document } from 'mongoose';
 
 interface Room {
@@ -59,7 +59,10 @@ export async function POST(req: Request) {
         const bookings = (await Booking.find({
             'rooms': {
                 $elemMatch: {
-                    'roomId': roomId.toString(),
+                    $or: [
+                        { 'roomId': roomId.toString() },
+                        { 'roomId': parseInt(roomId) }
+                    ],
                     'dates.date': {
                         $in: datesInMonth.map(d => d.date)
                     }

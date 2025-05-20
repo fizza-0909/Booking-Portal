@@ -1,68 +1,143 @@
-import { Schema, model, models } from 'mongoose';
-import { TimeSlot, BookingType } from '@/constants/pricing';
+import { Schema, model, models, Model, Document, CallbackError } from 'mongoose';
+
+interface IDate {
+    date: string;
+    startTime: string;
+    endTime: string;
+}
+
+interface IRoom {
+    roomId: string;
+    name: string;
+    timeSlot: 'morning' | 'evening' | 'full';
+    dates: IDate[];
+}
+
+interface IBooking extends Document {
+    userId: string;
+    rooms: IRoom[];
+    bookingType: 'daily' | 'monthly';
+    totalAmount: number;
+    status: 'pending' | 'confirmed' | 'cancelled' | 'failed';
+    paymentStatus: 'pending' | 'succeeded' | 'failed';
+    paymentIntentId?: string;
+    stripeCustomerId?: string;
+    paymentDetails?: {
+        status: string;
+        confirmedAt?: Date;
+        updatedAt?: Date;
+        amount?: number;
+        currency?: string;
+        paymentMethodType?: string;
+        error?: {
+            message?: string;
+            code?: string;
+            decline_code?: string;
+        };
+    };
+    isMembershipActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    isActive(): boolean;
+    getDuration(): number;
+}
+
+const dateSchema = new Schema({
+    date: {
+        type: String,
+        required: [true, 'Date is required'],
+        match: [/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format']
+    },
+    startTime: {
+        type: String,
+        required: [true, 'Start time is required'],
+        match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Start time must be in HH:MM format']
+    },
+    endTime: {
+        type: String,
+        required: [true, 'End time is required'],
+        match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'End time must be in HH:MM format']
+    }
+});
+
+const roomSchema = new Schema({
+    roomId: {
+        type: String,
+        required: [true, 'Room ID is required'],
+        trim: true
+    },
+    name: {
+        type: String,
+        required: [true, 'Room name is required'],
+        trim: true
+    },
+    timeSlot: {
+        type: String,
+        enum: ['morning', 'evening', 'full'],
+        required: [true, 'Time slot is required']
+    },
+    dates: {
+        type: [dateSchema],
+        required: [true, 'Dates are required'],
+        validate: {
+            validator: function(dates: any[]) {
+                return dates && dates.length > 0;
+            },
+            message: 'At least one date is required'
+        }
+    }
+});
+
+// Add pre-save middleware to validate dates
+roomSchema.pre('save', function(next) {
+    if (this.dates) {
+        for (const date of this.dates) {
+            if (!date.date || !date.startTime || !date.endTime) {
+                next(new Error('Each date must have date, startTime, and endTime'));
+                return;
+            }
+            
+            // Validate date format (YYYY-MM-DD)
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date.date)) {
+                next(new Error('Date must be in YYYY-MM-DD format'));
+                return;
+            }
+
+            // Validate time format (HH:MM)
+            if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(date.startTime) ||
+                !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(date.endTime)) {
+                next(new Error('Time must be in HH:MM format'));
+                return;
+            }
+        }
+    }
+    next();
+});
 
 const bookingSchema = new Schema({
     userId: {
-        type: Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
+        type: String,
+        required: [true, 'User ID is required'],
+        index: true
     },
-    rooms: [{
-        roomId: {
-            type: String,
-            required: true
-        },
-        name: {
-            type: String,
-            required: true
-        },
-        timeSlot: {
-            type: String,
-            enum: ['full', 'morning', 'evening'],
-            required: true
-        },
-        dates: [{
-            date: {
-                type: String,
-                required: true,
-                validate: {
-                    validator: function(v: string) {
-                        const date = new Date(v);
-                        return !isNaN(date.getTime());
-                    },
-                    message: props => `${props.value} is not a valid date`
-                }
+    rooms: {
+        type: [roomSchema],
+        required: [true, 'Rooms are required'],
+        validate: {
+            validator: function(rooms: any[]) {
+                return rooms && rooms.length > 0;
             },
-            startTime: {
-                type: String,
-                required: true,
-                validate: {
-                    validator: function(v: string) {
-                        return /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
-                    },
-                    message: props => `${props.value} is not a valid time format (HH:MM)`
-                }
-            },
-            endTime: {
-                type: String,
-                required: true,
-                validate: {
-                    validator: function(v: string) {
-                        return /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
-                    },
-                    message: props => `${props.value} is not a valid time format (HH:MM)`
-                }
-            }
-        }]
-    }],
+            message: 'At least one room is required'
+        }
+    },
     bookingType: {
         type: String,
         enum: ['daily', 'monthly'],
-        required: true
+        required: [true, 'Booking type is required']
     },
     totalAmount: {
         type: Number,
-        required: true,
+        required: [true, 'Total amount is required'],
         min: [0, 'Total amount cannot be negative']
     },
     status: {
@@ -77,8 +152,7 @@ const bookingSchema = new Schema({
     },
     paymentIntentId: {
         type: String,
-        sparse: true,
-        index: true
+        sparse: true
     },
     stripeCustomerId: {
         type: String,
@@ -87,11 +161,19 @@ const bookingSchema = new Schema({
     paymentDetails: {
         status: String,
         confirmedAt: Date,
-        failedAt: Date,
-        failureMessage: String,
+        updatedAt: Date,
         amount: Number,
         currency: String,
-        paymentMethodType: String
+        paymentMethodType: String,
+        error: {
+            message: String,
+            code: String,
+            decline_code: String
+        }
+    },
+    isMembershipActive: {
+        type: Boolean,
+        default: false
     },
     createdAt: {
         type: Date,
@@ -107,8 +189,7 @@ const bookingSchema = new Schema({
 
 // Add indexes for common queries
 bookingSchema.index({ userId: 1, status: 1 });
-bookingSchema.index({ paymentIntentId: 1 });
-bookingSchema.index({ 'rooms.roomId': 1, 'rooms.dates.date': 1 });
+bookingSchema.index({ paymentIntentId: 1 }, { sparse: true, unique: true });
 
 // Validate dates don't overlap for same room and time slot
 bookingSchema.pre('save', async function (next) {
@@ -149,18 +230,18 @@ bookingSchema.pre('save', async function (next) {
 });
 
 // Add method to check if booking is active
-bookingSchema.methods.isActive = function() {
+bookingSchema.methods.isActive = function(this: IBooking) {
     return this.status === 'confirmed' && this.paymentStatus === 'succeeded';
 };
 
 // Add method to get booking duration in days
-bookingSchema.methods.getDuration = function() {
+bookingSchema.methods.getDuration = function(this: IBooking) {
     if (!this.rooms.length || !this.rooms[0].dates.length) return 0;
-    const dates = this.rooms[0].dates.map(d => new Date(d.date));
-    const start = new Date(Math.min(...dates.map(d => d.getTime())));
-    const end = new Date(Math.max(...dates.map(d => d.getTime())));
+    const dates = this.rooms[0].dates.map((d: IDate) => new Date(d.date));
+    const start = new Date(Math.min(...dates.map((d: Date) => d.getTime())));
+    const end = new Date(Math.max(...dates.map((d: Date) => d.getTime())));
     return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 };
 
-export const Booking = models.Booking || model('Booking', bookingSchema);
+const Booking: Model<IBooking> = models.Booking || model<IBooking>('Booking', bookingSchema);
 export default Booking; 
