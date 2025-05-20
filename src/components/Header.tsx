@@ -15,6 +15,17 @@ const Header: React.FC = () => {
         router.push('/');
     };
 
+    const MembershipBadge = () => {
+        if (session?.user?.isMembershipActive) {
+            return (
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                    Membership activated
+                </span>
+            );
+        }
+        return null;
+    };
+
     if (!session) {
         return null;
     }
@@ -53,12 +64,13 @@ const Header: React.FC = () => {
                                 </div>
                                 <div className="flex items-center">
                                     <span className="text-gray-700 mr-2">{session.user.name}</span>
-                                    <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${session.user.isVerified
+                                    <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${session.user.isEmailVerified
                                         ? 'bg-green-100 text-green-800 border border-green-200'
                                         : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
                                         }`}>
-                                        {session.user.isVerified ? 'Verified' : 'Unverified'}
+                                        {session.user.isEmailVerified ? 'Verified' : 'Unverified'}
                                     </div>
+                                    <MembershipBadge />
                                 </div>
                             </button>
 
@@ -69,17 +81,18 @@ const Header: React.FC = () => {
                                             <div className="text-sm font-medium text-gray-900">
                                                 {session.user.name}
                                             </div>
-                                            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${session.user.isVerified
+                                            <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${session.user.isEmailVerified
                                                 ? 'bg-green-100 text-green-800 border border-green-200'
                                                 : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
                                                 }`}>
-                                                {session.user.isVerified ? 'Verified' : 'Unverified'}
+                                                {session.user.isEmailVerified ? 'Verified' : 'Unverified'}
                                             </div>
+                                            <MembershipBadge />
                                         </div>
                                         <div className="text-sm text-gray-500">
                                             {session.user.email}
                                         </div>
-                                        {!session.user.isVerified && (
+                                        {!session.user.isEmailVerified && (
                                             <div className="mt-2 text-xs text-yellow-700 bg-yellow-50 p-2 rounded">
                                                 Complete your first booking to get verified
                                             </div>

@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import Header from '@/components/Header';
 import jsPDF from 'jspdf';
 import { useSession } from 'next-auth/react';
+import { calculatePrice } from '@/utils/price';
 
 interface BookingDetails {
     rooms: Array<{
@@ -42,9 +43,15 @@ const PRICING = {
     }
 }
 
+const LoadingSpinner = () => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+);
+
 const ConfirmationPage = () => {
     const router = useRouter();
-    const { data: session } = useSession();
+    const { data: session, status, update } = useSession();
     const [isLoading, setIsLoading] = useState(true);
     const [paymentError, setPaymentError] = useState<PaymentError | null>(null);
     const [bookingDetails, setBookingDetails] = useState<BookingDetails | null>(null);
@@ -55,6 +62,29 @@ const ConfirmationPage = () => {
     const userName = session?.user ? `${session.user.firstName} ${session.user.lastName}` : 'N/A';
     const userEmail = session?.user?.email || 'N/A';
     const userPhone = (session?.user as any)?.phoneNumber || 'N/A';  // Type assertion since phoneNumber is optional
+    const isVerified = session?.user?.isMembershipActive;
+
+    useEffect(() => {
+        // Only update session when visibility changes
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                update();
+            }
+        };
+        
+        // Check authentication status
+        if (status === 'unauthenticated') {
+            toast.error('Please login to continue');
+            router.push('/login?callbackUrl=/booking/confirmation');
+            return;
+        }
+
+        // Add visibility listener
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [status, router, update]);
 
     useEffect(() => {
         const verifyPaymentAndBooking = async () => {
@@ -69,8 +99,6 @@ const ConfirmationPage = () => {
 
                 const { clientSecret } = JSON.parse(paymentIntentData);
                 const parsedBookingData = JSON.parse(bookingData);
-
-                setIsLoading(true);
 
                 // Verify payment status
                 const response = await fetch('/api/payment/verify', {
@@ -88,57 +116,37 @@ const ConfirmationPage = () => {
                         message: paymentStatus.error || 'Failed to verify payment'
                     });
                     setBookingDetails(null);
+                    router.push('/booking');
                     return;
                 }
 
-                if (paymentStatus.success) {
-                    // Payment succeeded
-                    setBookingDetails(parsedBookingData);
-                    setPaymentError(null);
-
-                    // Clear payment data from session storage
-                    sessionStorage.removeItem('paymentIntent');
-                    sessionStorage.removeItem('bookingData');
-                } else {
-                    // Payment failed or is incomplete
-                    setPaymentError({
-                        message: paymentStatus.message || 'Payment was not completed successfully',
-                        code: paymentStatus.code,
-                        decline_code: paymentStatus.decline_code
-                    });
-                    setBookingDetails(null);
-
-                    // Update booking status to failed
-                    await fetch('/api/bookings/update-status', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            bookingIds: parsedBookingData.bookingIds,
-                            status: 'failed',
-                            paymentError: {
-                                message: paymentStatus.message,
-                                code: paymentStatus.code,
-                                decline_code: paymentStatus.decline_code
-                            }
-                        }),
-                    });
-                }
+                setBookingDetails(parsedBookingData);
             } catch (error) {
                 console.error('Error verifying payment:', error);
                 setPaymentError({
-                    message: error instanceof Error ? error.message : 'An unknown error occurred'
+                    message: error instanceof Error ? error.message : 'Failed to verify payment'
                 });
-                setBookingDetails(null);
+                router.push('/booking');
             } finally {
                 setIsLoading(false);
                 setShowAnimation(false);
             }
         };
 
-        verifyPaymentAndBooking();
-    }, [router]);
+        if (status === 'authenticated') {
+            verifyPaymentAndBooking();
+        }
+    }, [status, router]);
+
+    // Show loading state while checking authentication or initializing
+    if (status === 'loading' || isLoading) {
+        return <LoadingSpinner />;
+    }
+
+    // If not authenticated, don't render anything
+    if (status === 'unauthenticated') {
+        return null;
+    }
 
     const formatDate = (dateStr: string) => {
         return new Date(dateStr).toLocaleDateString('en-US', {
@@ -330,13 +338,8 @@ const ConfirmationPage = () => {
         return '0.00';
     };
 
-    if (isLoading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-            </div>
-        );
-    }
+    // In the render, use the calculated price breakdown for display and PDF
+    const priceBreakdown = bookingDetails ? calculatePrice(bookingDetails.rooms, bookingDetails.bookingType, !!isVerified) : {subtotal:0, tax:0, securityDeposit:0, total:0};
 
     if (paymentError) {
         return (
@@ -462,19 +465,19 @@ const ConfirmationPage = () => {
                             <div className="space-y-2">
                                 <div className="flex justify-between">
                                     <span className="text-gray-600">Subtotal</span>
-                                    <span>${bookingDetails.priceBreakdown.subtotal.toFixed(2)}</span>
+                                    <span>${priceBreakdown.subtotal.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-gray-600">Tax</span>
-                                    <span>${bookingDetails.priceBreakdown.tax.toFixed(2)}</span>
+                                    <span>${priceBreakdown.tax.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-gray-600">Security Deposit (Refundable)</span>
-                                    <span>${bookingDetails.priceBreakdown.securityDeposit.toFixed(2)}</span>
+                                    <span>${priceBreakdown.securityDeposit.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between font-semibold text-lg pt-2 border-t">
                                     <span>Total Amount</span>
-                                    <span>${bookingDetails.priceBreakdown.total.toFixed(2)}</span>
+                                    <span>${priceBreakdown.total.toFixed(2)}</span>
                                 </div>
                             </div>
                         </section>

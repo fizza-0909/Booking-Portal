@@ -104,7 +104,7 @@ export async function POST(req: Request) {
             verificationTokenExpires: expires,
             verificationCode: code,
             verificationCodeExpires: codeExpires,
-            isVerified: false
+            isEmailVerified: false
         });
 
         // Send verification email

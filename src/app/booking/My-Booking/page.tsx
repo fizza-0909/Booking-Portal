@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import toast from 'react-hot-toast';
 import Header from '@/components/Header';
+import { calculatePrice } from '@/utils/price';
 
 interface PaymentError {
     message: string;
@@ -44,6 +45,20 @@ interface Booking {
     };
     createdAt: string;
 }
+
+const MembershipBadge = () => {
+    const { data: session } = useSession();
+    if (session?.user?.isMembershipActive) {
+        return (
+            <div className="flex justify-center mt-4">
+                <span className="px-3 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+                    Membership activated
+                </span>
+            </div>
+        );
+    }
+    return null;
+};
 
 const MyBookingsPage = () => {
     const router = useRouter();
@@ -122,26 +137,56 @@ const MyBookingsPage = () => {
         }
     }, [status, router, session?.user?.isMembershipActive, updateSession]);
 
+    useEffect(() => {
+        updateSession();
+        // Listen for tab visibility change to refresh session
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                updateSession();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [updateSession]);
+
     const formatDate = (dateStr: string) => {
         if (!dateStr) return 'Invalid Date';
-        // Try to parse as YYYY-MM-DD
-        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-            const [year, month, day] = dateStr.split('-').map(Number);
-            const date = new Date(year, month - 1, day);
-            return date.toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-            });
-        }
-        // Fallback: try to parse as Date
-        const date = new Date(dateStr);
-        if (!isNaN(date.getTime())) {
-            return date.toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-            });
+        try {
+            // Handle date object in booking.dates array
+            if (typeof dateStr === 'object' && dateStr.date) {
+                dateStr = dateStr.date;
+            }
+
+            // Try to parse as YYYY-MM-DD
+            if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                const [year, month, day] = dateStr.split('-').map(Number);
+                const date = new Date(year, month - 1, day);
+                if (!isNaN(date.getTime())) {
+                    return date.toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric'
+                    });
+                }
+            }
+            
+            // Try to parse as ISO string or timestamp
+            const date = new Date(dateStr);
+            if (!isNaN(date.getTime())) {
+                return date.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    month: 'long',
+                    day: 'numeric',
+                    year: 'numeric'
+                });
+            }
+
+            console.error('Invalid date format:', dateStr);
+        } catch (error) {
+            console.error('Error formatting date:', error, 'for date:', dateStr);
         }
         return 'Invalid Date';
     };
@@ -194,10 +239,29 @@ const MyBookingsPage = () => {
         router.push(`/booking/details/${booking._id}`);
     };
 
+    // Add a helper to get price breakdown for a booking
+    const getPriceBreakdown = (booking: Booking) => {
+        // Use the booking's type if available, otherwise fallback to 'daily'
+        const bookingType = (booking as any).bookingType || 'daily';
+        return calculatePrice(
+            [
+                {
+                    id: Number(booking.roomId),
+                    timeSlot: booking.timeSlot as any,
+                    dates: booking.dates
+                }
+            ],
+            bookingType,
+            session?.user?.isMembershipActive ?? false
+        );
+    };
+
     if (isLoading) {
         return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+            <div className="min-h-screen flex flex-col items-center justify-center">
+                <Header />
+                <MembershipBadge />
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mt-8"></div>
             </div>
         );
     }
@@ -205,6 +269,7 @@ const MyBookingsPage = () => {
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
             <Header />
+            <MembershipBadge />
 
             <div className="container mx-auto px-4 py-8">
                 <div className="flex justify-between items-center mb-8 max-w-7xl mx-auto">

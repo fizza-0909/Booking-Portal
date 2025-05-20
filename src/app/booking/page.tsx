@@ -18,10 +18,11 @@ interface Room {
     timeSlot: TimeSlot;
 }
 
-const BookingOptions = () => {
+const BookingPage = () => {
     const router = useRouter();
     const { data: session, status } = useSession();
     const [selectedOption, setSelectedOption] = useState<'daily' | 'monthly'>('daily');
+    const [isInitialized, setIsInitialized] = useState(false);
     const [rooms, setRooms] = useState<Room[]>([
         {
             id: 1,
@@ -49,13 +50,63 @@ const BookingOptions = () => {
         }
     ]);
 
+    // Initialize page and handle authentication
     useEffect(() => {
-        if (status === 'unauthenticated') {
-            toast.error('Please login to continue');
+        const initializePage = async () => {
+            try {
+                // Only clear booking data if we're starting a new booking
+                const currentPath = window.location.pathname;
+                if (currentPath === '/booking') {
+                    console.log('Starting new booking - clearing old data');
+                    sessionStorage.removeItem('selectedRooms');
+                    sessionStorage.removeItem('bookingType');
+                    sessionStorage.removeItem('bookingData');
+                    sessionStorage.removeItem('paymentIntent');
+                }
+                
+                setIsInitialized(true);
+            } catch (error) {
+                console.error('Error initializing page:', error);
+                toast.error('Failed to initialize booking page');
+            }
+        };
+
+        if (status === 'authenticated') {
+            initializePage();
+        } else if (status === 'unauthenticated') {
+            console.log('User is not authenticated, redirecting to login...');
             router.push('/login?callbackUrl=/booking');
         }
     }, [status, router]);
 
+    // Show loading state while checking authentication or initializing
+    if (status === 'loading' || !isInitialized) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+            </div>
+        );
+    }
+
+    // If not authenticated, show a message instead of immediately redirecting
+    if (status === 'unauthenticated') {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <div className="text-center">
+                    <h2 className="text-2xl font-semibold text-gray-800 mb-4">Please Log In</h2>
+                    <p className="text-gray-600 mb-6">You need to be logged in to access the booking page.</p>
+                    <button
+                        onClick={() => router.push('/login?callbackUrl=/booking')}
+                        className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                        Log In
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // Rest of your component code...
     const handleRoomSelect = (roomId: number) => {
         setRooms(rooms.map(room => {
             if (room.id === roomId) {
@@ -83,54 +134,62 @@ const BookingOptions = () => {
     };
 
     const handleContinue = () => {
-        if (status !== 'authenticated' || !session) {
-            toast.error('Please login to continue');
-            router.push('/login?callbackUrl=/booking');
-            return;
-        }
-
         const selectedRooms = rooms.filter(r => r.selected);
+        
+        console.log('Selected rooms before proceeding:', selectedRooms);
+        
         if (selectedRooms.length === 0) {
             toast.error('Please select at least one room');
             return;
         }
 
         try {
+            // Prepare the room data with proper initialization
             const roomsWithDates = selectedRooms.map(room => ({
-                ...room,
-                dates: [],
-                timeSlot: room.timeSlot
+                id: room.id,
+                name: room.name,
+                image: room.image,
+                description: room.description,
+                selected: true,
+                timeSlot: room.timeSlot,
+                dates: [] // Initialize empty dates array
             }));
 
-            // Store in sessionStorage
-            sessionStorage.setItem('bookingType', selectedOption);
+            // Log data being stored
+            console.log('Storing data:', {
+                bookingType: selectedOption,
+                rooms: roomsWithDates
+            });
+
+            // Store booking data
             sessionStorage.setItem('selectedRooms', JSON.stringify(roomsWithDates));
+            sessionStorage.setItem('bookingType', selectedOption);
+
+            // Verify data was stored correctly
+            const storedRooms = sessionStorage.getItem('selectedRooms');
+            const storedType = sessionStorage.getItem('bookingType');
+
+            if (!storedRooms || !storedType) {
+                throw new Error('Failed to store booking data');
+            }
+
+            // Verify stored data can be parsed
+            const parsedRooms = JSON.parse(storedRooms);
+            if (!Array.isArray(parsedRooms) || parsedRooms.length === 0) {
+                throw new Error('Invalid stored room data');
+            }
 
             toast.success('Proceeding to calendar...');
             router.push('/booking/calendar');
         } catch (error) {
-            console.error('Error storing booking data:', error);
-            toast.error('Error preparing booking data');
+            console.error('Error preparing booking data:', error);
+            toast.error('Error preparing booking data. Please try again.');
         }
     };
 
     const handleBack = () => {
         router.back();
     };
-
-    // Show loading state while checking authentication
-    if (status === 'loading') {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-            </div>
-        );
-    }
-
-    // If not authenticated, the useEffect will handle redirection
-    if (status === 'unauthenticated') {
-        return null;
-    }
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -165,10 +224,11 @@ const BookingOptions = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <button
                                 onClick={() => handleBookingTypeChange('daily')}
-                                className={`p-8 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${selectedOption === 'daily'
-                                    ? 'border-blue-500 bg-blue-50 shadow-lg'
-                                    : 'border-gray-200 hover:border-blue-300 hover:shadow-md'
-                                    }`}
+                                className={`p-8 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${
+                                    selectedOption === 'daily'
+                                        ? 'border-blue-500 bg-blue-50 shadow-lg'
+                                        : 'border-gray-200 hover:border-blue-300 hover:shadow-md'
+                                }`}
                             >
                                 <div className="flex flex-col items-center">
                                     <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-6">
@@ -187,10 +247,11 @@ const BookingOptions = () => {
 
                             <button
                                 onClick={() => handleBookingTypeChange('monthly')}
-                                className={`p-8 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${selectedOption === 'monthly'
-                                    ? 'border-blue-500 bg-blue-50 shadow-lg'
-                                    : 'border-gray-200 hover:border-blue-300 hover:shadow-md'
-                                    }`}
+                                className={`p-8 rounded-xl border-2 transition-all duration-300 transform hover:scale-105 ${
+                                    selectedOption === 'monthly'
+                                        ? 'border-blue-500 bg-blue-50 shadow-lg'
+                                        : 'border-gray-200 hover:border-blue-300 hover:shadow-md'
+                                }`}
                             >
                                 <div className="flex flex-col items-center">
                                     <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-6">
@@ -217,10 +278,11 @@ const BookingOptions = () => {
                                 <div key={room.id} className="relative rounded-xl overflow-hidden border-2 transition-all duration-300 transform hover:scale-105">
                                     <div
                                         onClick={() => handleRoomSelect(room.id)}
-                                        className={`cursor-pointer ${room.selected
-                                            ? 'border-4 border-blue-500 shadow-lg'
-                                            : 'border-gray-200 hover:border-blue-300'
-                                            }`}
+                                        className={`cursor-pointer ${
+                                            room.selected
+                                                ? 'border-4 border-blue-500 shadow-lg'
+                                                : 'border-gray-200 hover:border-blue-300'
+                                        }`}
                                     >
                                         <div className="aspect-w-16 aspect-h-9">
                                             <img
@@ -260,4 +322,4 @@ const BookingOptions = () => {
     );
 };
 
-export default BookingOptions; 
+export default BookingPage; 

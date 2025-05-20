@@ -125,30 +125,80 @@ export async function POST(req: Request) {
 
         // Debug log before membership update
         console.log('DEBUG: paymentStatus:', paymentStatus, 'user.isMembershipActive:', user.isMembershipActive);
-        // Always update user membership status if payment succeeded
-        if (paymentStatus === 'succeeded') {
+        // Always update user membership status if payment succeeded and user is not already activated
+        if (paymentStatus === 'succeeded' && !user.isMembershipActive) {
             try {
+                // Update user membership status
+                await User.findByIdAndUpdate(
+                    user._id,
+                    {
+                        $set: {
+                            isMembershipActive: true,
+                            membershipActivatedAt: new Date(),
+                            updatedAt: new Date()
+                        }
+                    },
+                    { new: true }
+                );
+
+                // Update the user object for email sending
                 user.isMembershipActive = true;
-                user.membershipActivatedAt = user.membershipActivatedAt || new Date();
-                user.updatedAt = new Date();
-                await user.save();
-                console.log('User membership status set to true:', {
+                user.membershipActivatedAt = new Date();
+                
+                console.log('User membership status activated after first payment:', {
                     userId: user._id,
-                    isMembershipActive: user.isMembershipActive
+                    isMembershipActive: true,
+                    membershipActivatedAt: new Date()
                 });
             } catch (err) {
                 console.error('Failed to update user membership status:', err);
             }
         }
 
+        // Format dates for email
+        const formattedRooms = booking.rooms.map((room: any) => {
+            // Ensure dates array exists and is properly formatted
+            const formattedDates = room.dates.map((date: any) => {
+                // Handle both string dates and date objects
+                const dateStr = typeof date === 'object' ? date.date : date;
+                if (!dateStr) {
+                    console.error('Invalid date format:', date);
+                    return null;
+                }
+
+                // Try to parse and format the date
+                try {
+                    if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                        return dateStr;
+                    }
+                    const dt = new Date(dateStr);
+                    if (isNaN(dt.getTime())) {
+                        console.error('Invalid date:', dateStr);
+                        return null;
+                    }
+                    return dt.toISOString().split('T')[0];
+                } catch (error) {
+                    console.error('Error formatting date:', error);
+                    return null;
+                }
+            }).filter(Boolean); // Remove any null values
+
+            return {
+                name: room.name,
+                timeSlot: room.timeSlot,
+                dates: formattedDates
+            };
+        });
+
         // Send confirmation email if payment succeeded
         if (paymentStatus === 'succeeded' && user.preferences?.emailNotifications) {
             try {
                 const { subject, html } = getBookingConfirmationEmail({
-                    ...body,
                     customerName: `${user.firstName} ${user.lastName}`,
                     bookingId: booking._id,
-                    amount: paymentDetails?.amount
+                    bookingType: booking.bookingType,
+                    totalAmount: paymentDetails?.amount || 0,
+                    rooms: formattedRooms
                 });
 
                 await sendEmail({

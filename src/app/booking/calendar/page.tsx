@@ -42,9 +42,15 @@ interface BookingResponse {
     timeSlots: TimeSlot[];
 }
 
+const LoadingSpinner = () => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+);
+
 const CalendarPage: React.FC = () => {
     const router = useRouter();
-    const { data: session, status } = useSession();
+    const { data: session, status, update } = useSession();
     const [currentMonth, setCurrentMonth] = useState(new Date());
     const [bookingType, setBookingType] = useState<'daily' | 'monthly'>('daily');
     const [showTimeSlots, setShowTimeSlots] = useState(false);
@@ -54,32 +60,74 @@ const CalendarPage: React.FC = () => {
     const [selectedRooms, setSelectedRooms] = useState<RoomBooking[]>([]);
     const [showHalfDayOptions, setShowHalfDayOptions] = useState(false);
     const [lastFetchTime, setLastFetchTime] = useState<number>(0);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isInitialized, setIsInitialized] = useState(false);
 
+    // Handle session updates
     useEffect(() => {
-        if (status === 'unauthenticated') {
-            toast.error('Please login to continue');
-            router.push('/login?callbackUrl=/booking/calendar');
-            return;
-        }
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                update();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [update]);
 
-        // Get stored booking data from sessionStorage
-        const storedRooms = sessionStorage.getItem('selectedRooms');
-        const storedBookingType = sessionStorage.getItem('bookingType');
+    // Initialize page data
+    useEffect(() => {
+        const initializePage = async () => {
+            try {
+                if (status === 'unauthenticated') {
+                    toast.error('Please login to continue');
+                    router.push('/login?callbackUrl=/booking/calendar');
+                    return;
+                }
 
-        if (!storedRooms || !storedBookingType) {
-            toast.error('Please select rooms before proceeding to calendar');
-            router.push('/booking');
-            return;
-        }
+                // Get stored booking data from sessionStorage
+                const storedRooms = sessionStorage.getItem('selectedRooms');
+                const storedBookingType = sessionStorage.getItem('bookingType');
 
-        try {
-            const parsedRooms = JSON.parse(storedRooms);
-            setSelectedRooms(parsedRooms);
-            setBookingType(storedBookingType as 'daily' | 'monthly');
-        } catch (error) {
-            console.error('Error parsing stored data:', error);
-            toast.error('Error loading booking data');
-            router.push('/booking');
+                console.log('Initializing with stored data:', {
+                    hasStoredRooms: !!storedRooms,
+                    hasStoredType: !!storedBookingType,
+                });
+
+                if (!storedRooms || !storedBookingType) {
+                    console.log('Missing required data, redirecting to booking page');
+                    toast.error('Please select rooms before proceeding to calendar');
+                    router.push('/booking');
+                    return;
+                }
+
+                try {
+                    const parsedRooms = JSON.parse(storedRooms);
+                    console.log('Parsed rooms:', parsedRooms);
+
+                    if (!Array.isArray(parsedRooms) || parsedRooms.length === 0) {
+                        throw new Error('Invalid room data structure');
+                    }
+
+                    setSelectedRooms(parsedRooms);
+                    setBookingType(storedBookingType as 'daily' | 'monthly');
+                    
+                    // Initial fetch of booking status
+                    await fetchBookingStatus();
+                } catch (error) {
+                    console.error('Error parsing stored data:', error);
+                    toast.error('Error loading booking data');
+                    router.push('/booking');
+                    return;
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (status !== 'loading') {
+            initializePage();
         }
     }, [status, router]);
 
@@ -100,22 +148,35 @@ const CalendarPage: React.FC = () => {
 
     // Add polling mechanism to refresh booking status
     useEffect(() => {
-        const pollInterval = 10000; // Poll every 10 seconds
-        const currentTime = Date.now();
+        let isMounted = true;
+        const pollInterval = 30000; // Poll every 30 seconds
 
-        // Only poll if more than 10 seconds have passed since last fetch
-        if (currentTime - lastFetchTime >= pollInterval) {
-            fetchBookingStatus();
-            setLastFetchTime(currentTime);
+        const poll = async () => {
+            if (!isMounted || selectedRooms.length === 0) return;
+            
+            try {
+                await fetchBookingStatus();
+                setLastFetchTime(Date.now());
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        };
+
+        // Initial poll
+        if (selectedRooms.length > 0) {
+            poll();
         }
 
-        const intervalId = setInterval(() => {
-            fetchBookingStatus();
-            setLastFetchTime(Date.now());
-        }, pollInterval);
+        // Set up interval
+        const intervalId = setInterval(poll, pollInterval);
 
-        return () => clearInterval(intervalId);
-    }, [currentMonth, selectedRooms, lastFetchTime]);
+        // Cleanup
+        return () => {
+            isMounted = false;
+            clearInterval(intervalId);
+            console.log('Cleaning up polling interval');
+        };
+    }, [selectedRooms, currentMonth]);
 
     const handleLogout = () => {
         localStorage.removeItem('user');
@@ -123,82 +184,44 @@ const CalendarPage: React.FC = () => {
     };
 
     const fetchBookingStatus = async () => {
+        if (selectedRooms.length === 0) return;
+
         try {
-            // Add delay between requests to prevent rate limiting
-            const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+            console.log('Fetching booking status for rooms:', selectedRooms.map(r => r.id));
 
-            console.log('Starting to fetch booking status for rooms:', selectedRooms.map(r => r.id));
-
-            // Fetch booking status for each selected room
-            const promises = selectedRooms.map(async (room, index) => {
-                try {
-                    // Add small delay between requests
-                    await delay(index * 100);
-
-                    const roomId = room.id.toString();
-                    console.log(`Fetching booking status for room ${roomId}...`);
-
-                    const response = await fetch('/api/bookings/status', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            month: currentMonth.getMonth() + 1,
-                            year: currentMonth.getFullYear(),
-                            roomId
-                        }),
-                    });
-
-                    if (!response.ok) {
-                        const errorData = await response.json().catch(() => ({}));
-                        console.error(`Server error for room ${roomId}:`, {
-                            status: response.status,
-                            statusText: response.statusText,
-                            error: errorData
+            const results = await Promise.all(
+                selectedRooms.map(async (room) => {
+                    try {
+                        const response = await fetch('/api/bookings/status', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                month: currentMonth.getMonth() + 1,
+                                year: currentMonth.getFullYear(),
+                                roomId: room.id.toString()
+                            }),
                         });
-                        throw new Error(`Failed to fetch booking status for room ${roomId}: ${response.statusText}`);
-                    }
 
-                    const data = await response.json();
-                    console.log(`Successfully fetched bookings for room ${roomId}:`, data);
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
 
-                    if (!data.bookings || !Array.isArray(data.bookings)) {
-                        console.error(`Invalid booking data for room ${roomId}:`, data);
+                        const data = await response.json();
+                        return data.bookings || [];
+                    } catch (error) {
+                        console.error(`Error fetching room ${room.id} status:`, error);
                         return [];
                     }
+                })
+            );
 
-                    // Validate each booking has required fields
-                    const validBookings = data.bookings.filter((booking: any): booking is BookingResponse =>
-                        booking &&
-                        typeof booking === 'object' &&
-                        'date' in booking &&
-                        'roomId' in booking &&
-                        'timeSlots' in booking &&
-                        Array.isArray(booking.timeSlots)
-                    );
+            const allBookings = results.flat().filter(booking => 
+                booking && booking.status === 'confirmed'
+            );
 
-                    console.log(`Valid bookings for room ${roomId}:`, validBookings);
-                    return validBookings;
-                } catch (error) {
-                    console.error(`Error fetching status for room ${room.id}:`, error);
-                    toast.error(`Failed to load availability for room ${room.id}`);
-                    return [];
-                }
-            });
-
-            console.log('Waiting for all booking status promises to resolve...');
-            const results = await Promise.all(promises);
-
-            console.log('Processing booking results...');
-            const allBookings = results.flat();
-
-            console.log('Final processed bookings:', allBookings);
             setBookingStatus(allBookings);
         } catch (error) {
             console.error('Failed to fetch booking status:', error);
-            toast.error('Failed to load booking availability. Please try refreshing the page.');
-            setBookingStatus([]);
         }
     };
 
@@ -232,55 +255,29 @@ const CalendarPage: React.FC = () => {
 
         // Handle monthly booking differently
         if (bookingType === 'monthly') {
-            // Clear any existing dates for this room
+            // For monthly bookings, select all dates in the month
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const dates = Array.from({ length: daysInMonth }, (_, i) => {
+                const newDate = new Date(year, month, i + 1);
+                return newDate.toISOString().split('T')[0];
+            }).filter(dateStr => {
+                const d = new Date(dateStr);
+                return !isWeekend(d) && !isDateBooked(d, roomId, room.timeSlot);
+            });
+
             setSelectedRooms(prev =>
-                prev.map(r => {
-                    if (r.id === roomId) {
-                        return { ...r, dates: [] };
-                    }
-                    return r;
-                })
+                prev.map(r =>
+                    r.id === roomId
+                        ? { ...r, dates: dates }
+                        : r
+                )
             );
 
-            // Generate array of dates until we get 30 available days
-            const dates: string[] = [];
-            let currentDate = new Date(normalizedDate);
-            let daysChecked = 0;
-            const maxDaysToCheck = 60; // Maximum days to look ahead to prevent infinite loop
-
-            while (dates.length < 30 && daysChecked < maxDaysToCheck) {
-                // Skip weekends
-                if (!isWeekend(currentDate)) {
-                    // Check if the slot is available
-                    if (isTimeSlotAvailable(currentDate, roomId, room.timeSlot)) {
-                        // Format date string
-                        const year = currentDate.getFullYear();
-                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-                        const day = String(currentDate.getDate()).padStart(2, '0');
-                        dates.push(`${year}-${month}-${day}`);
-                    }
-                }
-
-                // Move to next day
-                currentDate.setDate(currentDate.getDate() + 1);
-                daysChecked++;
+            if (dates.length > 0) {
+                toast.success(`Selected ${dates.length} available dates`);
             }
-
-            if (dates.length === 0) {
-                toast.error('No available dates found starting from the selected date');
-                return;
-            }
-
-            // Update selected rooms with available dates
-            setSelectedRooms(prev =>
-                prev.map(r => {
-                    if (r.id === roomId) {
-                        return { ...r, dates };
-                    }
-                    return r;
-                })
-            );
-            toast.success(`Selected ${dates.length} days starting from ${formatDisplayDate(dates[0])}`);
         } else {
             // Daily booking logic
             const year = normalizedDate.getFullYear();
@@ -470,29 +467,22 @@ const CalendarPage: React.FC = () => {
 
     const calculatePrice = () => {
         let subtotal = 0;
-
-        // Calculate subtotal based on rooms and dates
+        const fullDayPrice = 300;
+        const halfDayPrice = 160;
+        const monthlyFullDayPrice = 2000;
+        const monthlyHalfDayPrice = 1200;
         selectedRooms.forEach(room => {
             const numberOfDays = room.dates?.length || 0;
             if (numberOfDays === 0) return; // Skip rooms with no dates selected
-
-            const basePrice = PRICING[bookingType][room.timeSlot];
-
-            // Add to subtotal based on booking type
             if (bookingType === 'daily') {
+                const basePrice = room.timeSlot === 'full' ? fullDayPrice : halfDayPrice;
                 subtotal += basePrice * numberOfDays;
             } else {
-                subtotal += basePrice; // Monthly price is flat rate
+                subtotal += room.timeSlot === 'full' ? monthlyFullDayPrice : monthlyHalfDayPrice;
             }
         });
-
-        // Calculate tax
-        const tax = subtotal * PRICING.taxRate;
-
-        // Calculate security deposit - only for unverified users
-        const securityDeposit = !session?.user?.isVerified ? PRICING.securityDeposit : 0;
-
-        // Return all price components
+        const tax = subtotal * 0.035;
+        const securityDeposit = session?.user?.isMembershipActive ? 0 : 250;
         return {
             subtotal,
             tax,
@@ -634,12 +624,6 @@ const CalendarPage: React.FC = () => {
 
         // Check for different booking scenarios
         if (status && Array.isArray(status.timeSlots) && status.timeSlots.length > 0) {
-            console.log('Rendering booked status for:', {
-                date: dateStr,
-                roomId: room.id,
-                timeSlots: status.timeSlots
-            });
-
             // If fully booked
             if (status.timeSlots.includes('full')) {
                 return 'bg-red-100 text-red-600 cursor-not-allowed';
@@ -842,11 +826,12 @@ const CalendarPage: React.FC = () => {
         if (!date) return false;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        date.setHours(0, 0, 0, 0);
         return date < today;
     };
 
-    // Show loading state while checking authentication
-    if (status === 'loading') {
+    // Show loading state while checking authentication or initializing
+    if (status === 'loading' || isLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-gray-50">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
@@ -854,7 +839,7 @@ const CalendarPage: React.FC = () => {
         );
     }
 
-    // If not authenticated, the useEffect will handle redirection
+    // If not authenticated, don't render anything
     if (status === 'unauthenticated') {
         return null;
     }
@@ -1040,8 +1025,8 @@ const CalendarPage: React.FC = () => {
                                                         className={`aspect-square p-2 rounded-lg text-center transition-all duration-200 ${getDateClassName(date, room)}`}
                                                         title={
                                                             !date ? "" :
-                                                                isWeekendDay ? "Weekend is not available" :
-                                                                    isPast ? "Past dates are not available" :
+                                                                isPast ? "Cannot book past dates" :
+                                                                    isWeekendDay ? "Weekend is not available" :
                                                                         isBooked ? `This time slot (${room.timeSlot}) is already booked` :
                                                                             ""
                                                         }
@@ -1071,7 +1056,7 @@ const CalendarPage: React.FC = () => {
                                             </div>
                                             <div className="flex items-center space-x-2">
                                                 <div className="w-4 h-4 bg-gray-100 rounded"></div>
-                                                <span>Weekend/Unavailable</span>
+                                                <span>Weekend/Past Dates/Unavailable</span>
                                             </div>
                                         </div>
                                     </div>
@@ -1167,7 +1152,7 @@ const CalendarPage: React.FC = () => {
                                             <span>Tax (3.5%):</span>
                                             <span>+ ${calculatePrice().tax.toFixed(2)}</span>
                                         </div>
-                                        {!session?.user?.isVerified && (
+                                        {!session?.user?.isMembershipActive && (
                                             <div className="flex justify-between items-center text-sm text-gray-600">
                                                 <div className="flex-1">
                                                     <div className="flex items-center">
@@ -1191,7 +1176,7 @@ const CalendarPage: React.FC = () => {
                                                 <span>Total Price:</span>
                                                 <span className="text-blue-600">${calculatePrice().total.toFixed(2)}</span>
                                             </div>
-                                            {!session?.user?.isVerified && (
+                                            {!session?.user?.isMembershipActive && (
                                                 <p className="text-xs text-gray-500 mt-1">
                                                     *A refundable security deposit of $250 will be charged as this is your first booking
                                                 </p>

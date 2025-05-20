@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import { PRICING, TimeSlot } from '@/constants/pricing';
 import { useSession } from 'next-auth/react';
+import { calculatePrice } from '@/utils/price';
 
 interface BookingDetails {
     bookingId: string;
@@ -21,13 +22,30 @@ interface BookingDetails {
     status: string;
 }
 
-const SuccessPage: React.FC = () => {
+const MembershipBadge = () => {
+    const { data: session } = useSession();
+    if (session?.user?.isMembershipActive) {
+        return (
+            <span className="inline-block px-3 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+                Membership activated
+            </span>
+        );
+    }
+    return null;
+};
+
+const SuccessPageContent: React.FC = () => {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { data: session, update: updateSession } = useSession();
+    const { data: session, update } = useSession();
     const [bookingDetails, setBookingDetails] = useState<BookingDetails | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        // Refresh session on mount to get latest verification status
+        update();
+    }, [update]);
 
     useEffect(() => {
         const confirmBooking = async () => {
@@ -63,7 +81,7 @@ const SuccessPage: React.FC = () => {
                 const result = await response.json();
                 
                 // Update session to reflect new membership status
-                await updateSession();
+                await update();
 
                 setBookingDetails({
                     ...parsedBooking,
@@ -84,7 +102,7 @@ const SuccessPage: React.FC = () => {
         };
 
         confirmBooking();
-    }, [searchParams, session, updateSession]);
+    }, [searchParams, session, update]);
 
     const handleDownload = () => {
         if (!bookingDetails) return;
@@ -145,6 +163,17 @@ const SuccessPage: React.FC = () => {
         return d.toLocaleDateString();
     };
 
+    // Add a helper to get price breakdown for display
+    const getPriceBreakdown = () => {
+        if (!bookingDetails) return { subtotal: 0, tax: 0, securityDeposit: 0, total: 0 };
+        // Use the shared utility
+        return calculatePrice(
+            bookingDetails.rooms,
+            bookingDetails.bookingType,
+            session?.user?.isMembershipActive ?? false
+        );
+    };
+
     if (!bookingDetails) {
         return (
             <div className="min-h-screen bg-gray-50">
@@ -189,7 +218,7 @@ const SuccessPage: React.FC = () => {
                             </div>
                             <div>
                                 <p className="text-sm text-gray-600">Total Amount</p>
-                                <p className="font-semibold">${bookingDetails.totalAmount.toFixed(2)}</p>
+                                <p className="font-semibold">${getPriceBreakdown().total.toFixed(2)}</p>
                             </div>
                         </div>
                     </div>
@@ -214,6 +243,21 @@ const SuccessPage: React.FC = () => {
                 </div>
             </div>
         </div>
+    );
+};
+
+const SuccessPage: React.FC = () => {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-gray-50">
+                <Header />
+                <div className="flex items-center justify-center min-h-screen">
+                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+                </div>
+            </div>
+        }>
+            <SuccessPageContent />
+        </Suspense>
     );
 };
 

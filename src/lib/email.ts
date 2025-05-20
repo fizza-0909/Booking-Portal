@@ -71,6 +71,21 @@ export async function sendEmail({ to, subject, html }: EmailOptions) {
 
 // Email templates
 export function getBookingConfirmationEmail(booking: any) {
+    const formatDate = (dateStr: string) => {
+        try {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric'
+            });
+        } catch (error) {
+            console.error('Error formatting date:', error);
+            return dateStr;
+        }
+    };
+
     return {
         subject: 'Booking Confirmation - Hire a Clinic',
         html: `
@@ -87,13 +102,13 @@ export function getBookingConfirmationEmail(booking: any) {
                     
                     <h3 style="color: #1f2937;">Room Details</h3>
                     ${booking.rooms.map((room: any) => `
-                        <div style="margin-bottom: 15px;">
+                        <div style="margin-bottom: 15px; border-left: 3px solid #3b82f6; padding-left: 10px;">
                             <p><strong>Room:</strong> ${room.name}</p>
                             <p><strong>Time Slot:</strong> ${room.timeSlot}</p>
                             <p><strong>Dates:</strong></p>
-                            <ul>
+                            <ul style="margin: 5px 0; padding-left: 20px;">
                                 ${room.dates.map((date: string) => `
-                                    <li>${new Date(date).toLocaleDateString()}</li>
+                                    <li style="margin: 3px 0;">${formatDate(date)}</li>
                                 `).join('')}
                             </ul>
                         </div>

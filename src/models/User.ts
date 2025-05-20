@@ -135,8 +135,6 @@ userSchema.methods.deactivateMembership = async function() {
 };
 
 // Add indexes for common queries
-userSchema.index({ email: 1 });
-userSchema.index({ stripeCustomerId: 1 });
 userSchema.index({ isMembershipActive: 1, membershipExpiresAt: 1 });
 
 const User = models.User || model('User', userSchema);

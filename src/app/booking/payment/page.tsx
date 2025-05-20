@@ -13,6 +13,7 @@ import {
 } from '@stripe/react-stripe-js';
 import Header from '@/components/Header';
 import { useSession } from 'next-auth/react';
+import { calculatePrice } from '@/utils/price';
 
 // Initialize Stripe
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
@@ -78,7 +79,7 @@ const PaymentForm = ({ priceBreakdown, clientSecret }: { priceBreakdown: PriceBr
     const stripe = useStripe();
     const elements = useElements();
     const router = useRouter();
-    const { update: updateSession } = useSession();
+    const { update } = useSession();
     const [error, setError] = useState<string | null>(null);
     const [processing, setProcessing] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -96,7 +97,7 @@ const PaymentForm = ({ priceBreakdown, clientSecret }: { priceBreakdown: PriceBr
             if (verifyResponse.ok) {
                 const verifyData = await verifyResponse.json();
                 console.log('Successfully verified user after payment:', verifyData);
-                await updateSession();
+                await update();
             } else {
                 console.error('Failed to verify user after payment');
             }
@@ -162,7 +163,7 @@ const PaymentForm = ({ priceBreakdown, clientSecret }: { priceBreakdown: PriceBr
                             if (!verifyResponse.ok) {
                                 console.error('Warning: Failed to verify user after payment');
                             } else {
-                                await updateSession();
+                                await update();
                             }
 
                             // Clear session storage
@@ -205,7 +206,7 @@ const PaymentForm = ({ priceBreakdown, clientSecret }: { priceBreakdown: PriceBr
                 }
             });
         }
-    }, [stripe, router, updateSession]);
+    }, [stripe, router, update]);
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault();
@@ -292,8 +293,15 @@ const PaymentForm = ({ priceBreakdown, clientSecret }: { priceBreakdown: PriceBr
     );
 };
 
+const LoadingSpinner = () => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+);
+
 const PaymentPage = () => {
     const router = useRouter();
+    const { data: session, status, update } = useSession();
     const [clientSecret, setClientSecret] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -305,88 +313,60 @@ const PaymentPage = () => {
         isMembershipActive: false
     });
 
-    const handleProceedToPayment = async () => {
-        try {
-            const bookingData = sessionStorage.getItem('bookingData');
-            if (!bookingData) {
-                throw new Error('No booking data found');
+    useEffect(() => {
+        // Only update session when visibility changes
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                update();
             }
-
-            const parsedData = JSON.parse(bookingData) as BookingData;
-            if (!parsedData.rooms || !Array.isArray(parsedData.rooms)) {
-                throw new Error('Invalid booking data structure');
-            }
-
-            // Transform the booking data to match the schema
-            const transformedBookingData: TransformedBookingData = {
-                rooms: parsedData.rooms.map((room: RoomData) => ({
-                    roomId: room.id.toString(),
-                    name: room.name,
-                    timeSlot: room.timeSlot,
-                    dates: room.dates.map((date: string) => ({
-                        date: date,
-                        startTime: room.timeSlot === 'morning' ? '08:00' : room.timeSlot === 'evening' ? '14:00' : '08:00',
-                        endTime: room.timeSlot === 'morning' ? '13:00' : room.timeSlot === 'evening' ? '19:00' : '19:00'
-                    }))
-                })),
-                bookingType: parsedData.bookingType,
-                totalAmount: parsedData.totalAmount,
-                status: 'pending',
-                paymentStatus: 'pending'
-            };
-
-            // Create payment intent
-            const response = await fetch('/api/payment/intent', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    amount: Math.round(parsedData.totalAmount * 100), // Convert to cents for Stripe
-                    bookingData: transformedBookingData
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to create payment intent');
-            }
-
-            const { clientSecret } = await response.json();
-            if (!clientSecret) {
-                throw new Error('No client secret received');
-            }
-
-            // Store the transformed booking data
-            sessionStorage.setItem('bookingData', JSON.stringify(transformedBookingData));
-            sessionStorage.setItem('paymentIntent', JSON.stringify({ clientSecret }));
-
-            router.push('/booking/payment');
-        } catch (error) {
-            console.error('Error creating payment intent:', error);
-            toast.error(error instanceof Error ? error.message : 'Failed to create payment intent');
+        };
+        
+        // Check authentication status
+        if (status === 'unauthenticated') {
+            toast.error('Please login to continue');
+            router.push('/login?callbackUrl=/booking/payment');
+            return;
         }
-    };
+
+        // Add visibility listener
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [status, router, update]);
 
     useEffect(() => {
         const initializePage = async () => {
             try {
-                const bookingData = sessionStorage.getItem('bookingData');
+                // Always use the original bookingData for price calculation
+                const originalBookingDataStr = sessionStorage.getItem('bookingData');
                 const paymentIntent = sessionStorage.getItem('paymentIntent');
 
-                if (!bookingData || !paymentIntent) {
-                    throw new Error('No booking details found');
+                if (!originalBookingDataStr || !paymentIntent) {
+                    toast.error('No booking details found');
+                    router.push('/booking');
+                    return;
                 }
 
-                const parsedData = JSON.parse(bookingData);
-                const { clientSecret } = JSON.parse(paymentIntent);
-
-                if (!parsedData.rooms || !Array.isArray(parsedData.rooms) || parsedData.rooms.length === 0) {
-                    throw new Error('Invalid booking data: No rooms selected');
+                let originalBookingData: BookingData;
+                try {
+                    originalBookingData = JSON.parse(originalBookingDataStr);
+                } catch (error) {
+                    toast.error('Invalid booking data');
+                    router.push('/booking');
+                    return;
                 }
 
-                if (!parsedData.totalAmount || parsedData.totalAmount <= 0) {
-                    throw new Error('Invalid booking data: Invalid amount');
+                if (!originalBookingData.rooms || !Array.isArray(originalBookingData.rooms) || originalBookingData.rooms.length === 0) {
+                    toast.error('No valid booking details found');
+                    router.push('/booking');
+                    return;
+                }
+
+                if (!originalBookingData.totalAmount || originalBookingData.totalAmount <= 0) {
+                    toast.error('Invalid booking data: Invalid amount');
+                    router.push('/booking');
+                    return;
                 }
 
                 // Get user verification status
@@ -395,40 +375,36 @@ const PaymentPage = () => {
                 const isMembershipActive = userData.isMembershipActive;
 
                 // Calculate price breakdown based on verification status
-                const subtotal = parsedData.totalAmount * 0.93;
-                const tax = parsedData.totalAmount * 0.035;
-                const securityDeposit = isMembershipActive ? 0 : 250 * parsedData.rooms.length; // $250 per room for non-members
-
-                const priceBreakdownData = {
-                    subtotal,
-                    tax,
-                    securityDeposit,
-                    total: subtotal + tax + (isMembershipActive ? 0 : 250 * parsedData.rooms.length),
+                console.log('PAYMENT PAGE:', { rooms: originalBookingData.rooms, bookingType: originalBookingData.bookingType, isMembershipActive });
+                const priceBreakdownData = calculatePrice(
+                    originalBookingData.rooms,
+                    originalBookingData.bookingType,
                     isMembershipActive
-                };
-
-                setPriceBreakdown(priceBreakdownData);
+                );
+                setPriceBreakdown({ ...priceBreakdownData, isMembershipActive });
+                const { clientSecret } = JSON.parse(paymentIntent);
                 setClientSecret(clientSecret);
             } catch (error) {
-                console.error('Error processing booking data:', error);
-                const errorMessage = error instanceof Error ? error.message : 'Invalid booking data';
-                setError(errorMessage);
-                toast.error(errorMessage);
+                setError(error instanceof Error ? error.message : 'Failed to initialize payment page');
                 router.push('/booking');
             } finally {
                 setIsLoading(false);
             }
         };
 
-        initializePage();
-    }, [router]);
+        if (status === 'authenticated') {
+            initializePage();
+        }
+    }, [status, router]);
 
-    if (isLoading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-            </div>
-        );
+    // Show loading state while checking authentication or initializing
+    if (status === 'loading' || isLoading) {
+        return <LoadingSpinner />;
+    }
+
+    // If not authenticated, don't render anything
+    if (status === 'unauthenticated') {
+        return null;
     }
 
     return (

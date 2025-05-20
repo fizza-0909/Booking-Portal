@@ -7,6 +7,7 @@ import { PRICING, TimeSlot, BookingType } from '@/constants/pricing';
 import Header from '@/components/Header';
 import { useSession } from 'next-auth/react';
 import { loadStripe } from '@stripe/stripe-js';
+import { calculatePrice } from '@/utils/price';
 
 interface Room {
     id: number;
@@ -30,44 +31,19 @@ interface BookingData {
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
 
-const calculatePriceBreakdown = (rooms: Room[], bookingType: BookingType, isMembershipActive: boolean) => {
-    // Base prices for daily bookings
-    const fullDayPrice = 300;
-    const halfDayPrice = 160;
-
-    // Only add security deposit if user is not a member
-    const securityDeposit = isMembershipActive ? 0 : 250;
-
-    let subtotal = 0;
-
-    // Calculate subtotal based on room selections
-    rooms.forEach(room => {
-        const basePrice = room.timeSlot === 'full' ? fullDayPrice : halfDayPrice;
-        const daysCount = room.dates.length;
-        subtotal += basePrice * daysCount;
-    });
-
-    // Calculate tax
-    const tax = subtotal * 0.035; // 3.5% tax
-
-    // Calculate total
-    const total = Math.round((subtotal + tax + securityDeposit) * 100) / 100;
-
-    return {
-        subtotal: Math.round(subtotal * 100) / 100,
-        tax: Math.round(tax * 100) / 100,
-        securityDeposit,
-        total,
-        isFirstBooking: !isMembershipActive
-    };
-};
+const LoadingSpinner = () => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+);
 
 const SummaryPage = () => {
     const router = useRouter();
-    const { data: session, status } = useSession();
+    const { data: session, status, update } = useSession();
     const [selectedRooms, setSelectedRooms] = useState<Room[]>([]);
     const [bookingType, setBookingType] = useState<BookingType>('daily');
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
     const [acceptedTerms, setAcceptedTerms] = useState(false);
     const [priceBreakdown, setPriceBreakdown] = useState<PriceBreakdown>({
         subtotal: 0,
@@ -78,46 +54,98 @@ const SummaryPage = () => {
     });
 
     useEffect(() => {
+        // Only update session when visibility changes
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                update();
+            }
+        };
+        
+        // Check authentication status
         if (status === 'unauthenticated') {
             toast.error('Please login to continue');
             router.push('/login?callbackUrl=/booking/summary');
             return;
         }
 
-        const bookingDataStr = sessionStorage.getItem('bookingData');
-        if (!bookingDataStr) {
-            toast.error('No booking details found');
-            router.push('/booking');
-            return;
-        }
+        // Add visibility listener
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [status, router, update]);
 
-        try {
-            const bookingData = JSON.parse(bookingDataStr) as BookingData;
-            setSelectedRooms(bookingData.rooms);
-            setBookingType(bookingData.bookingType);
+    useEffect(() => {
+        const initializePage = async () => {
+            try {
+                const bookingDataStr = sessionStorage.getItem('bookingData');
+                if (!bookingDataStr) {
+                    toast.error('No booking details found');
+                    router.push('/booking');
+                    return;
+                }
 
-            // Get the verification status from the session
-            const isMembershipActive = session?.user?.isMembershipActive ?? false;
-            console.log('User verification status:', { isMembershipActive });
+                let bookingData: BookingData;
+                try {
+                    bookingData = JSON.parse(bookingDataStr) as BookingData;
+                } catch (error) {
+                    console.error('Error parsing booking data:', error);
+                    toast.error('Invalid booking data');
+                    router.push('/booking');
+                    return;
+                }
 
-            const priceBreakdownData = calculatePriceBreakdown(
-                bookingData.rooms,
-                bookingData.bookingType,
-                isMembershipActive
-            );
-            setPriceBreakdown(priceBreakdownData);
+                if (!bookingData.rooms || !Array.isArray(bookingData.rooms) || bookingData.rooms.length === 0) {
+                    toast.error('No valid booking details found');
+                    router.push('/booking');
+                    return;
+                }
 
-            const updatedBookingData = {
-                ...bookingData,
-                totalAmount: priceBreakdownData.total
-            };
-            sessionStorage.setItem('bookingData', JSON.stringify(updatedBookingData));
-        } catch (error) {
-            console.error('Error parsing booking data:', error);
-            toast.error('Invalid booking data');
-            router.push('/booking');
+                setSelectedRooms(bookingData.rooms);
+                setBookingType(bookingData.bookingType);
+
+                // Get the verification status from the session
+                const isMembershipActive = session?.user?.isMembershipActive ?? false;
+                console.log('SUMMARY PAGE:', { rooms: bookingData.rooms, bookingType: bookingData.bookingType, isMembershipActive });
+
+                const priceBreakdownData = calculatePrice(
+                    bookingData.rooms,
+                    bookingData.bookingType,
+                    isMembershipActive
+                );
+                setPriceBreakdown({ ...priceBreakdownData, isFirstBooking: !isMembershipActive });
+
+                // Only update sessionStorage if the data is not already correct
+                if (bookingData.totalAmount !== priceBreakdownData.total) {
+                    const updatedBookingData = {
+                        ...bookingData,
+                        totalAmount: priceBreakdownData.total
+                    };
+                    sessionStorage.setItem('bookingData', JSON.stringify(updatedBookingData));
+                }
+            } catch (error) {
+                console.error('Error initializing page:', error);
+                toast.error('Failed to load booking details');
+                router.push('/booking');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (status === 'authenticated') {
+            initializePage();
         }
     }, [router, status, session?.user?.isMembershipActive]);
+
+    // Show loading state while checking authentication or initializing
+    if (status === 'loading' || isLoading) {
+        return <LoadingSpinner />;
+    }
+
+    // If not authenticated, don't render anything
+    if (status === 'unauthenticated') {
+        return null;
+    }
 
     const handleRemoveDate = (roomId: number, dateToRemove: string) => {
         if (bookingType !== 'daily') {
@@ -142,8 +170,8 @@ const SummaryPage = () => {
         }
 
         setSelectedRooms(updatedRooms);
-        const newPriceBreakdown = calculatePriceBreakdown(updatedRooms, bookingType, session?.user?.isMembershipActive || false);
-        setPriceBreakdown(newPriceBreakdown);
+        const newPriceBreakdown = calculatePrice(updatedRooms, bookingType, session?.user?.isMembershipActive || false);
+        setPriceBreakdown({ ...newPriceBreakdown, isFirstBooking: !(session?.user?.isMembershipActive || false) });
 
         const bookingData = {
             rooms: updatedRooms,
@@ -313,12 +341,6 @@ const SummaryPage = () => {
             setIsProcessing(false);
         }
     };
-
-    if (status === 'loading') {
-        return <div className="min-h-screen flex items-center justify-center">
-            <div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-blue-500"></div>
-        </div>;
-    }
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
