@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useState, Suspense } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import toast from 'react-hot-toast';
 import Header from '@/components/Header';
 import { PRICING, TimeSlot } from '@/constants/pricing';
-import { useSession } from 'next-auth/react';
 import { calculatePrice } from '@/utils/price';
 
 interface BookingDetails {
@@ -53,15 +54,16 @@ const SuccessPageContent: React.FC = () => {
         const confirmBooking = async () => {
             try {
                 console.log('Starting booking confirmation process...');
-                const bookingData = localStorage.getItem('bookingData');
+                const bookingData = sessionStorage.getItem('bookingData');
                 const paymentIntentId = searchParams.get('payment_intent');
+                const bookingId = searchParams.get('booking_id');
                 const paymentStatus = searchParams.get('payment_status') || 'succeeded';
 
-                if (!bookingData || !paymentIntentId) {
+                if (!bookingData || !paymentIntentId || !bookingId) {
                     throw new Error('Missing booking data or payment information');
                 }
 
-                console.log('Payment info:', { paymentIntentId, paymentStatus });
+                console.log('Payment info:', { paymentIntentId, paymentStatus, bookingId });
                 const parsedBooking = JSON.parse(bookingData);
 
                 // First, verify the payment and update membership status
@@ -72,18 +74,19 @@ const SuccessPageContent: React.FC = () => {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        clientSecret: paymentIntentId + '_secret_' + Math.random().toString(36).substring(7)
+                        clientSecret: paymentIntentId,
+                        bookingId
                     }),
                 });
 
                 if (!verifyResponse.ok) {
                     console.error('Failed to verify payment status');
                     const errorData = await verifyResponse.json();
-                    console.error('Verification error:', errorData);
-                } else {
-                    const verifyResult = await verifyResponse.json();
-                    console.log('Payment verification result:', verifyResult);
+                    throw new Error(errorData.message || 'Payment verification failed');
                 }
+
+                const verifyResult = await verifyResponse.json();
+                console.log('Payment verification result:', verifyResult);
 
                 // Then confirm the booking
                 console.log('Confirming booking...');
@@ -96,6 +99,7 @@ const SuccessPageContent: React.FC = () => {
                         ...parsedBooking,
                         paymentIntentId,
                         paymentStatus,
+                        bookingId
                     }),
                 });
 
@@ -112,28 +116,30 @@ const SuccessPageContent: React.FC = () => {
                 await update();
                 console.log('Session updated');
 
-                // Clear booking data from localStorage
-                localStorage.removeItem('bookingData');
+                // Clear booking data from sessionStorage
+                sessionStorage.removeItem('bookingData');
                 
                 setBookingDetails(result.booking);
-
-                // Force a page reload after 2 seconds to ensure all states are updated
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
-            } catch (error) {
-                console.error('Error confirming booking:', error);
-                setError(error instanceof Error ? error.message : 'Failed to confirm booking');
-            } finally {
-                setIsLoading(false);
                 setShowAnimation(false);
+                setIsLoading(false);
+
+            } catch (error) {
+                console.error('Error in booking confirmation:', error);
+                setError(error instanceof Error ? error.message : 'An unexpected error occurred');
+                setShowAnimation(false);
+                setIsLoading(false);
+                toast.error(error instanceof Error ? error.message : 'Failed to confirm booking');
+                // Redirect to booking page after error
+                setTimeout(() => {
+                    router.push('/booking');
+                }, 3000);
             }
         };
 
         if (status === 'authenticated') {
             confirmBooking();
         }
-    }, [status, searchParams, update]);
+    }, [status, searchParams, router, update]);
 
     const handleDownload = () => {
         if (!bookingDetails) return;
@@ -205,12 +211,41 @@ const SuccessPageContent: React.FC = () => {
         );
     };
 
-    if (!bookingDetails) {
+    if (error) {
         return (
             <div className="min-h-screen bg-gray-50">
                 <Header />
-                <div className="flex items-center justify-center min-h-screen">
-                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+                <div className="container mx-auto px-4 py-8">
+                    <div className="max-w-md mx-auto bg-white rounded-lg shadow-lg p-6">
+                        <div className="text-center">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
+                                <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-900 mb-4">Booking Failed</h2>
+                            <p className="text-gray-600">{error}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (isLoading || !bookingDetails) {
+        return (
+            <div className="min-h-screen bg-gray-50">
+                <Header />
+                <div className="container mx-auto px-4 py-8">
+                    <div className="max-w-md mx-auto bg-white rounded-lg shadow-lg p-6">
+                        <div className="text-center">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
+                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-900 mb-4">Processing Your Booking</h2>
+                            <p className="text-gray-600">Please wait while we confirm your payment and finalize your booking...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         );
@@ -219,37 +254,60 @@ const SuccessPageContent: React.FC = () => {
     return (
         <div className="min-h-screen bg-gray-50">
             <Header />
-            <div className="container mx-auto px-4 py-24">
-                <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-xl p-8">
+            <div className="container mx-auto px-4 py-8">
+                <div className="max-w-3xl mx-auto bg-white rounded-lg shadow-lg p-8">
                     <div className="text-center mb-8">
-                        <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
-                            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
+                            <svg className="h-8 w-8 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                         </div>
-                        <h1 className="text-3xl font-bold text-gray-900 mb-2">Booking Successful!</h1>
-                        <p className="text-gray-600">Your booking has been confirmed and processed successfully.</p>
+                        <h1 className="text-3xl font-bold text-gray-900 mb-2">Booking Confirmed!</h1>
+                        <p className="text-gray-600">Your booking has been successfully confirmed.</p>
+                        <MembershipBadge />
                     </div>
 
-                    <div className="border-t border-b border-gray-200 py-6 mb-6">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <p className="text-sm text-gray-600">Booking ID</p>
-                                <p className="font-semibold">{bookingDetails.bookingId}</p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-600">Booking Date</p>
-                                <p className="font-semibold">
-                                    {formatDateSafe(bookingDetails.bookingDate)}
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-600">Customer Name</p>
-                                <p className="font-semibold">{bookingDetails.customerName}</p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-600">Total Amount</p>
-                                <p className="font-semibold">${getPriceBreakdown().total.toFixed(2)}</p>
+                    <div className="grid gap-6 mb-8">
+                        <div className="border rounded-lg p-6">
+                            <h2 className="text-xl font-semibold mb-4">Booking Details</h2>
+                            <dl className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <dt className="text-sm text-gray-600">Booking ID</dt>
+                                    <dd className="font-medium">{bookingDetails.bookingId}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-sm text-gray-600">Customer Name</dt>
+                                    <dd className="font-medium">{bookingDetails.customerName}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-sm text-gray-600">Booking Type</dt>
+                                    <dd className="font-medium capitalize">{bookingDetails.bookingType}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-sm text-gray-600">Total Amount</dt>
+                                    <dd className="font-medium">${getPriceBreakdown().total.toFixed(2)}</dd>
+                                </div>
+                            </dl>
+                        </div>
+
+                        <div className="border rounded-lg p-6">
+                            <h2 className="text-xl font-semibold mb-4">Room Details</h2>
+                            <div className="space-y-4">
+                                {bookingDetails.rooms.map((room, index) => (
+                                    <div key={index} className="border-b last:border-b-0 pb-4 last:pb-0">
+                                        <h3 className="font-medium mb-2">Room {room.name}</h3>
+                                        <dl className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <dt className="text-sm text-gray-600">Time Slot</dt>
+                                                <dd className="capitalize">{room.timeSlot}</dd>
+                                            </div>
+                                            <div>
+                                                <dt className="text-sm text-gray-600">Dates</dt>
+                                                <dd>{room.dates.map(date => formatDateSafe(date)).join(', ')}</dd>
+                                            </div>
+                                        </dl>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     </div>
@@ -257,7 +315,7 @@ const SuccessPageContent: React.FC = () => {
                     <div className="flex justify-center space-x-4">
                         <button
                             onClick={handleDownload}
-                            className="inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200"
+                            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center"
                         >
                             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -265,10 +323,10 @@ const SuccessPageContent: React.FC = () => {
                             Download Booking Details
                         </button>
                         <button
-                            onClick={() => router.push('/')}
-                            className="inline-flex items-center px-6 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors duration-200"
+                            onClick={() => router.push('/dashboard')}
+                            className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                         >
-                            Return to Home
+                            Go to Dashboard
                         </button>
                     </div>
                 </div>
@@ -277,19 +335,4 @@ const SuccessPageContent: React.FC = () => {
     );
 };
 
-const SuccessPage: React.FC = () => {
-    return (
-        <Suspense fallback={
-            <div className="min-h-screen bg-gray-50">
-                <Header />
-                <div className="flex items-center justify-center min-h-screen">
-                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-                </div>
-            </div>
-        }>
-            <SuccessPageContent />
-        </Suspense>
-    );
-};
-
-export default SuccessPage; 
+export default SuccessPageContent; 
